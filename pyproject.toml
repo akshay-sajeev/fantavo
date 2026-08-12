@@ -13,5 +13,12 @@ plugins = ["numpy.typing.mypy_plugin"]
 module = "apscheduler.*"
 ignore_missing_imports = true
 
+# scipy ships no inline type stubs for scipy.stats (a separate scipy-stubs
+# package exists but isn't installed) -- sim/api/roster_view.py calls only
+# scipy.stats.gamma.ppf, not worth vendoring stubs for one function.
+[[tool.mypy.overrides]]
+module = "scipy.*"
+ignore_missing_imports = true
+
 [tool.ruff]
 line-length = 96

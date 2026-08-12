@@ -9,6 +9,8 @@ in route handlers" rules both apply directly here.
 
     GET  /league/{league_id}/simulation   cached precomputed results
     POST /league/{league_id}/whatif       live, n_sims=2000, roster overrides
+    GET  /league/{league_id}/roster       team rosters + per-player risk metrics
+    GET  /league/{league_id}/schedule     regular-season schedule + current week
 
 Both routes accept the ingest schema's real grain: an optional `season_id`
 (query param on GET, body field on POST). If omitted, the most recently
@@ -16,6 +18,15 @@ ingested season for that league is used (see
 `params_loader.resolve_season_id`) -- the plan's URL shape has no season in
 it, but `league_id` alone is not a primary key in this schema (Phase 3 keyed
 everything by (league_id, season_id) on purpose).
+
+`/roster` and `/schedule` were added in Phase 5b, additively, to serve the
+dashboard and risk-panel UI: both are pure read serializations of data
+already computed in memory by `sim.api.roster_view` / `sim.api.schedule_view`
+(themselves built from the same `ingest.parse` / `sim.params` pipeline, or
+straight off the already-normalized `matchup`/`team` tables) -- neither adds
+a new simulation path, calls `simulate_seasons()` differently, or invents
+any value. See those two modules' docstrings for exactly what each derived
+field means and why it isn't "analytics logic" in the CLAUDE.md sense.
 """
 
 from __future__ import annotations
@@ -35,6 +46,8 @@ from ingest.db import DEFAULT_DEV_DSN, connect, dsn_from_env
 from ingest.errors import IngestError
 from sim.api.cache import read_cached_simulation, serialize_result
 from sim.api.params_loader import LeagueNotIngestedError, load_league, resolve_season_id
+from sim.api.roster_view import RosterPlayer, TeamRosterView, load_team_rosters
+from sim.api.schedule_view import ScheduledMatchup, load_schedule
 from sim.api.scheduler import start_scheduler
 from sim.api.seeds import draw_whatif_seed
 from sim.engine import PlayerParams, simulate_seasons
@@ -88,6 +101,96 @@ class WhatIfRequest(BaseModel):
     # from OS entropy (sim.api.seeds.draw_whatif_seed) if omitted -- see
     # that module's docstring for the full seeding rationale.
     seed: int | None = None
+
+
+class RosterPlayerOut(BaseModel):
+    """One rostered player plus their per-game risk metrics. `floor`/
+    `ceiling` are the 10th/90th percentile of the same per-game
+    Gamma(mean, sd) distribution the engine samples from -- see
+    `sim.api.roster_view` for the exact derivation."""
+
+    player_id: int
+    name: str
+    position: str
+    lineup_slot: str
+    is_starter: bool
+    mean: float
+    sd: float
+    availability: float
+    floor: float
+    ceiling: float
+
+
+class TeamRosterOut(BaseModel):
+    team_id: int
+    team_name: str
+    starters: list[RosterPlayerOut]
+    bench: list[RosterPlayerOut]
+    risk_rating: float
+    positional_concentration: list[str]
+
+
+class RosterResponse(BaseModel):
+    league_id: int
+    season_id: int
+    teams: list[TeamRosterOut]
+
+
+class ScheduledMatchupOut(BaseModel):
+    week: int
+    home_team_id: int | None
+    home_team_name: str | None
+    away_team_id: int | None
+    away_team_name: str | None
+    winner: str | None
+
+
+class ScheduleResponse(BaseModel):
+    league_id: int
+    season_id: int
+    n_regular_weeks: int
+    # None if the schedule table has no undecided matchup left -- see
+    # sim.api.schedule_view's docstring for the exact rule. Never a
+    # fabricated week number.
+    current_week: int | None
+    weeks: list[list[ScheduledMatchupOut]]
+
+
+def _to_roster_player_out(player: RosterPlayer) -> RosterPlayerOut:
+    return RosterPlayerOut(
+        player_id=player.player_id,
+        name=player.name,
+        position=player.position,
+        lineup_slot=player.lineup_slot,
+        is_starter=player.is_starter,
+        mean=player.mean,
+        sd=player.sd,
+        availability=player.availability,
+        floor=player.floor,
+        ceiling=player.ceiling,
+    )
+
+
+def _to_team_roster_out(team: TeamRosterView) -> TeamRosterOut:
+    return TeamRosterOut(
+        team_id=team.team_id,
+        team_name=team.team_name,
+        starters=[_to_roster_player_out(p) for p in team.starters],
+        bench=[_to_roster_player_out(p) for p in team.bench],
+        risk_rating=team.risk_rating,
+        positional_concentration=list(team.positional_concentration),
+    )
+
+
+def _to_matchup_out(matchup: ScheduledMatchup) -> ScheduledMatchupOut:
+    return ScheduledMatchupOut(
+        week=matchup.week,
+        home_team_id=matchup.home_team_id,
+        home_team_name=matchup.home_team_name,
+        away_team_id=matchup.away_team_id,
+        away_team_name=matchup.away_team_name,
+        winner=matchup.winner,
+    )
 
 
 def _to_response(
@@ -210,4 +313,46 @@ def post_whatif(
     computed_at = datetime.now(timezone.utc)
     return _to_response(
         league_id, resolved_season_id, seed, computed_at, serialize_result(result)
+    )
+
+
+@app.get("/league/{league_id}/roster", response_model=RosterResponse)
+def get_roster(
+    league_id: int,
+    season_id: int | None = None,
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> RosterResponse:
+    try:
+        resolved_season_id = resolve_season_id(conn, league_id, season_id)
+        rosters = load_team_rosters(conn, league_id, resolved_season_id)
+    except LeagueNotIngestedError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except _DATA_UNAVAILABLE_ERRORS as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return RosterResponse(
+        league_id=league_id,
+        season_id=resolved_season_id,
+        teams=[_to_team_roster_out(t) for t in rosters],
+    )
+
+
+@app.get("/league/{league_id}/schedule", response_model=ScheduleResponse)
+def get_schedule(
+    league_id: int,
+    season_id: int | None = None,
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> ScheduleResponse:
+    try:
+        resolved_season_id = resolve_season_id(conn, league_id, season_id)
+        schedule = load_schedule(conn, league_id, resolved_season_id)
+    except LeagueNotIngestedError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return ScheduleResponse(
+        league_id=league_id,
+        season_id=resolved_season_id,
+        n_regular_weeks=schedule.n_regular_weeks,
+        current_week=schedule.current_week,
+        weeks=[[_to_matchup_out(m) for m in week] for week in schedule.weeks],
     )

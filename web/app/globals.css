@@ -1,0 +1,141 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-body);
+  --font-mono: var(--font-heading);
+  --font-heading: var(--font-heading);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  /* MASTER.md's "Accent/CTA" amber, kept as its own token rather than
+     overloading shadcn's structural --accent (which drives every generic
+     hover/selected state across shadcn components). Used explicitly and
+     sparingly: CTA-style highlights only, e.g. the current-week badge and
+     the top power-ranking row. See docs/decisions.md Phase 5b. */
+  --color-brand-accent: var(--brand-accent);
+  --color-brand-accent-foreground: var(--brand-accent-foreground);
+  --color-data-blue: var(--data-blue);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+}
+
+/* Fantavo palette, from design-system/MASTER.md (Phase 5a, reviewed and
+   approved) -- light theme only. MASTER.md's dials targeted a dense,
+   always-on-while-checking-scores dashboard, not a themeable marketing
+   site, and specified no dark palette, so no dark-mode toggle is wired up
+   in 5b (see docs/decisions.md). */
+:root {
+  --background: #f8fafc;
+  --foreground: #1e3a8a;
+  --card: #ffffff;
+  --card-foreground: #1e3a8a;
+  --popover: #ffffff;
+  --popover-foreground: #1e3a8a;
+  --primary: #1e40af;
+  --primary-foreground: #ffffff;
+  /* Structural shadcn "secondary" (generic filled button / muted surface) --
+     kept as a light neutral, not MASTER's saturated data-blue (#3B82F6,
+     --data-blue below), so ordinary secondary buttons don't compete
+     visually with real chart data. */
+  --secondary: #e9eef6;
+  --secondary-foreground: #1e3a8a;
+  --muted: #e9eef6;
+  --muted-foreground: #475569;
+  /* Structural shadcn "accent" (hover/selected tint across menus, tabs,
+     table rows) -- a light tint, not the brand accent amber. See
+     --brand-accent above for the real MASTER "Accent/CTA" color. */
+  --accent: #eff4fc;
+  --accent-foreground: #1e3a8a;
+  --brand-accent: #d97706;
+  /* White-on-#D97706 measures ~3.2:1 (MASTER's own note: adjusted only for
+     a 3:1 large-graphic-object threshold) -- below the 4.5:1 minimum this
+     design system's own checklist requires for text. Dark text measures
+     >6:1, so brand-accent-colored badges/buttons use dark text. */
+  --brand-accent-foreground: #1f2937;
+  --data-blue: #3b82f6;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --border: #dbeafe;
+  --input: #dbeafe;
+  --ring: #1e40af;
+  --chart-1: #1e40af;
+  --chart-2: #3b82f6;
+  --chart-3: #d97706;
+  --chart-4: #0ea5a4;
+  --chart-5: #7c3aed;
+  --radius: 0.5rem;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #1e3a8a;
+  --sidebar-primary: #1e40af;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eff4fc;
+  --sidebar-accent-foreground: #1e3a8a;
+  --sidebar-border: #dbeafe;
+  --sidebar-ring: #1e40af;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+  h1,
+  h2,
+  h3,
+  h4,
+  .font-heading {
+    font-family: var(--font-heading);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

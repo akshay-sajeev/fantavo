@@ -642,3 +642,190 @@ One line per non-obvious choice and why. Appended at the end of each phase.
 - No `Makefile` exists yet (same gap Phases 0-4 already noted) — this phase
   needed no test/typecheck/lint run since it touches no application code,
   only a design-token markdown file and a decisions-log entry.
+
+## Phase 5b — Dashboard
+
+- **API gap found before any UI work, escalated rather than worked around.**
+  `sim/api/app.py` (Phase 4) returned only aggregate per-team simulation
+  outcomes -- no player/roster/position/schedule/actual-game data of any
+  kind -- which blocks 2 of PLAN.md's 3 required 5b features (dashboard
+  rosters/schedule/current-matchup, and the entire risk panel). Presented
+  the gap and two options (scope down vs. extend the API) before writing
+  any frontend code; the project owner approved **Option B: an
+  additive-only extension** to `sim/api/app.py` exposing data
+  `sim.api.params_loader`/`ingest.parse` already compute in memory, with no
+  engine changes and no second simulation path.
+- **Two new routes, two new modules, following Phase 4's exact patterns
+  (season_id resolution, `LeagueNotIngestedError`->404,
+  `IngestError`/`ParamsError`->409):**
+  - `GET /league/{id}/roster` (`sim/api/roster_view.py`): per-team
+    starters/bench with player name, position, lineup slot, and the same
+    `mean`/`sd`/`availability` `PlayerParams` already derives -- reruns the
+    identical `ingest.parse` + `sim.params` pipeline `load_league` uses,
+    just keeping the name/position metadata `load_league` normally
+    discards, rather than adding a second derivation path.
+  - `GET /league/{id}/schedule` (`sim/api/schedule_view.py`): built
+    directly off the already-normalized `league`/`team`/`matchup` tables
+    (no raw-payload reparsing needed, since `matchup_period_id`/
+    `home_team_id`/`away_team_id`/`winner` are already extracted columns).
+- **`floor`/`ceiling` on each roster player are the 10th/90th percentile of
+  the *exact same* per-game Gamma(mean, sd) distribution
+  `sim.engine._sample_team_weeks` samples from** -- same shape/scale
+  formula, imported directly from `sim.engine` (`_gamma_shape_scale`)
+  rather than re-derived, so the two can never silently drift apart.
+  Computed with `scipy.stats.gamma.ppf` (closed-form inverse CDF, added a
+  `scipy.*` mypy override alongside the existing `apscheduler.*` one) --
+  no sampling happens, so this is not a second simulation path, just an
+  analytic property of a distribution the engine already uses.
+- **Team `risk_rating` and `positional_concentration` are plain, fully
+  documented arithmetic over a team's own already-serialized starters**,
+  computed in `sim/api/roster_view.py` (not `sim.engine`, not the
+  frontend): `risk_rating = 1 - (Σ mean_i·availability_i)/(Σ mean_i)` (the
+  fraction of a team's expected starting points exposed to weekly
+  unavailability), and `positional_concentration` flags any starting
+  position with zero same-position bench depth. Kept server-side
+  specifically because CLAUDE.md's "no analytics logic in components" rule
+  means the frontend must only render, never compute, a rollup like this --
+  even a "simple" one.
+- **`current_week` on the schedule response is derived purely from the
+  `matchup` table's own `winner` column** (first week with an undecided
+  matchup; `None` if every matchup is already decided) -- never a
+  wall-clock guess or a fabricated week number. For today's synthetic
+  league (`winner == "UNDECIDED"` everywhere), this correctly reports week
+  1 as current/upcoming. Verified with a test that flips every `winner` to
+  `"HOME"` and confirms `current_week` becomes `None`
+  (`sim/tests/test_api_schedule.py`).
+- **New backend tests**: `sim/tests/test_api_roster.py` (9 tests total
+  across both new files) verify floor < mean < ceiling per player, the
+  route matches a direct `load_team_rosters()` call exactly, risk_rating is
+  0 when every starter is fully available, and positional_concentration
+  flags exactly the positions with zero bench depth -- including an
+  explicit assertion that the synthetic league's mock draft (which only
+  fills starting slots, never bench) produces zero bench players for every
+  team, a real property of that fixture, not a bug in the formula.
+  `sim/tests/test_api_schedule.py` covers the 404 case, the all-undecided
+  case, the all-decided case, and a route-vs-direct-call equivalence check.
+  Full suite: 118 passed (109 from Phases 0-4 plus 9 new); `mypy --strict
+  sim ingest` still shows only the same 21 pre-existing errors Phase 4
+  documented (0 new); `ruff check sim ingest db scripts` shows only the
+  same pre-existing findings (0 new) in files this phase didn't touch.
+- **Next.js pinned to 15.5.23, not `create-next-app@latest`'s default
+  (Next 16.3.0).** CLAUDE.md's repo layout explicitly states "Next.js 15";
+  scaffolded with `create-next-app@latest` (the CLI itself, version
+  16.3.0) and then downgraded `next`/`eslint-config-next` to `15.5.23`
+  rather than deviate from the documented stack. Consequence: `npm audit`
+  shows 3 high-severity advisories (postcss XSS/path-traversal, sharp/libvips
+  CVEs) whose only fix is upgrading to Next 16 -- accepted for now since
+  this is a local single-developer dev service, not a deployed target, and
+  revisit if/when a real deploy is planned.
+- **`eslint.config.mjs` uses `FlatCompat` from `@eslint/eslintrc`, not the
+  direct `eslint-config-next/core-web-vitals` import `create-next-app`
+  scaffolded.** `eslint-config-next@15.5.23` still ships its config in the
+  legacy (eslintrc `extends`) format, not a flat-config array -- the direct
+  subpath-import pattern the newer (Next 16) CLI generated doesn't work
+  against this version. `FlatCompat` is the standard, documented bridge for
+  exactly this situation.
+- **Recharts stayed on the CLI-installed v3.8.0 (not downgraded to 2.x),
+  after finding and fixing a real bug rather than working around it via a
+  different library version.** The power-rankings horizontal bar chart
+  initially rendered bars at wildly wrong, inconsistent widths (verified by
+  inspecting rendered SVG path/rect geometry directly, not just visually) --
+  root-caused to `<Bar>`'s default entrance animation getting stuck in an
+  intermediate transition frame specifically when `<Cell>` children are
+  used for per-bar coloring (a `layout="vertical"` + `Cell` + animation
+  interaction, reproduced identically across a clean dev-server restart
+  with cache cleared, ruling out HMR staleness). Fixed with
+  `isAnimationActive={false}` on the `<Bar>`, which also happens to align
+  with MASTER.md's own Motion dial (3/10, "subtle") -- this default
+  animation was heavier than that dial calls for regardless. A brief
+  detour attempted downgrading to `recharts@2.15.x` (avoided, since
+  `components/ui/chart.tsx` -- shadcn's own generated wrapper -- imports
+  v3-only exported types like `TooltipValueType` that don't exist in v2,
+  which would have meant hand-patching the shadcn-generated file).
+- **Design tokens resolve a naming collision between MASTER.md's "Accent/CTA"
+  (a saturated amber, `#D97706`, meant for real CTA buttons) and shadcn's
+  structural `--accent` token (a light neutral hover/selected tint used
+  across every menu/tab/table-row interaction).** Wiring MASTER's amber
+  directly into shadcn's `--accent` would have turned every generic hover
+  state bright amber -- a busy, "ornate" result MASTER.md's own anti-pattern
+  list forbids. Resolution: `--accent` stays a light neutral tint;
+  MASTER's actual amber lives in a new `--brand-accent` token, used only
+  for genuine CTAs/highlights (the "Upcoming" week badge, the champion
+  segment in `FinishDistributionStrip`). Same treatment for MASTER's
+  "Secondary" data-blue (`#3B82F6`): kept as its own `--data-blue` /
+  chart-series token rather than shadcn's structural `--secondary`
+  (ordinary secondary buttons stay a light neutral so they don't visually
+  compete with real chart data).
+  - **Contrast-driven deviation from MASTER.md's literal button CSS:**
+    computed WCAG contrast for white text on `#D97706` (~3.2:1) and on
+    `#3B82F6` (~3.7:1) -- both below the checklist's own 4.5:1 minimum for
+    normal-size text, even though MASTER's own `.btn-primary` CSS snippet
+    uses white text on the amber. `--brand-accent-foreground` uses dark
+    text (`#1F2937`, >6:1 on amber) instead, documented in `globals.css`
+    directly next to the token. A narrow, evidence-based deviation from the
+    literal generated CSS in service of the design system's own stated
+    accessibility requirement, not a stylistic override.
+  - No dark-mode palette: MASTER.md specifies light-only tokens (no dark
+    dial output), so no theme toggle is wired up in 5b; `globals.css` keeps
+    shadcn's `.dark` class scaffold present but unused.
+- **"Where roster strength and record disagree, say so" (PLAN.md), resolved
+  honestly for a schedule with zero completed weeks.** `lib/standings.ts`
+  tallies *actual* records by literally counting already-decided
+  `schedule.winner` values per team (`"HOME"`/`"AWAY"`/`"TIE"`) -- treated
+  as bookkeeping over facts the API already returned, not "analytics logic"
+  in CLAUDE.md's sense (no probability, no weighting, nothing
+  `simulate_seasons()` computes differently), the same class of operation
+  as sorting an already-returned array. For today's synthetic league (every
+  matchup `"UNDECIDED"`), `StandingsTable` detects zero games played
+  league-wide and renders an explicit "no games have been played yet"
+  banner instead of a fabricated comparison; the "record diverges from
+  projected strength" flag is real code that activates automatically, on
+  the same path, once real weekly results exist (Phase 9) -- no
+  special-casing for synthetic vs. real data anywhere.
+- **"Current matchup" defined as `schedule.current_week`'s matchups,
+  explicitly labeled "Upcoming," never rendered as a result.** For a league
+  with no completed weeks there is no played "current" game to show;
+  fabricating one was explicitly ruled out. If `current_week` is `None`
+  (every matchup decided), the dashboard shows a "Season complete" state
+  instead of guessing a week number.
+- **`FinishDistributionStrip` (a segmented/stacked horizontal bar) is used
+  for `finish_distribution`, not a box plot**, even though MASTER.md's
+  Chart Recommendations lists Box Plot first for "finish-position spread."
+  `finish_distribution` is an already-discretized probability-mass array (one
+  float per finish place, `n_playoff_teams + 1` buckets) returned by the
+  API, not the raw per-simulation samples a box plot needs -- MASTER.md's
+  own text calls out this exact secondary case ("a per-rank
+  stacked/horizontal bar... is the natural secondary view when the
+  discreteness of 'finish place' needs to be legible"). Applying the chart
+  type that matches the *actual* API response shape, per Phase 5a's own
+  guidance, rather than forcing a box plot onto data it doesn't fit.
+- **Fonts loaded via `next/font/google` (self-hosted, no FOUC, no
+  render-blocking request) rather than the `<link>`/`@import` MASTER.md's
+  markdown literally shows** -- same two families (Fira Code for headings,
+  Fira Sans for body), different, better-practice delivery mechanism for a
+  Next.js app specifically.
+- **No league-picker or auth flow.** Out of scope for 5b (not in PLAN.md's
+  three required features). `/` redirects to `DEFAULT_LEAGUE_ID` (env var,
+  defaults to the synthetic league). Every page under `/league/[leagueId]`
+  is otherwise fully generic on that route param -- nothing in `/web`
+  special-cases `leagueId === -1990001` or checks for "synthetic" in any
+  way, so it will work unmodified once the project owner drafts and
+  re-ingests the real league.
+- **`lib/api.ts` is the only place `/web` talks to the sim API**, marked
+  `import "server-only"` so an accidental client-component import is a
+  build error rather than a silent leak of the internal service URL into
+  the browser bundle. All three pages fetch via Server Components
+  (`fetch(..., { cache: "no-store" })`); no SWR/React Query, since 5b has
+  no live client-side interactivity (that starts in Phase 6's what-if UI).
+- **Verification**: `npx tsc --noEmit`, `npx eslint .`, and `npm run build`
+  (production build) all clean with zero errors/warnings. Backend:
+  `pytest -q` 118 passed, `mypy --strict sim ingest` 21 pre-existing errors
+  (0 new), `ruff check sim ingest db scripts` pre-existing findings only (0
+  new). Visually verified in a real browser (Next dev server + uvicorn,
+  both against `league_id=-1990001`) at 375/768/1024/1440px: dashboard
+  (standings, current matchup, rosters, remaining schedule), power rankings
+  (bar chart + full breakdown table), and roster risk (per-team cards with
+  positional-concentration flags and per-player floor/ceiling bars) all
+  render correctly; confirmed no page-level horizontal scroll at 375px via
+  `document.documentElement.scrollWidth`; confirmed the 404/error path
+  renders a readable message for an un-ingested league id.
