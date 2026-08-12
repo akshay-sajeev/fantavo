@@ -1,0 +1,10 @@
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["sim/tests", "ingest/tests"]
+
+[tool.mypy]
+strict = true
+plugins = ["numpy.typing.mypy_plugin"]
+
+[tool.ruff]
+line-length = 96
