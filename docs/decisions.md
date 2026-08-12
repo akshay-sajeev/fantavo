@@ -550,3 +550,95 @@ One line per non-obvious choice and why. Appended at the end of each phase.
   `test_api_synthetic_ingest.py`, 5 in `test_api_params_loader.py`, 3 in
   `test_api_cache.py`, 3 in `test_api_precompute.py`, 7 in
   `test_api_app.py`).
+
+## Phase 5a — Design system
+
+- **Generation mechanism: the `ui-ux-pro-max` skill's real `search.py` CLI**,
+  invoked via `Skill` tool call `ui-ux-pro-max:design-system` (which surfaced
+  the plugin's on-disk skill directory, including its `scripts/search.py` and
+  its `data/*.csv` databases — 84 styles, 192 palettes, 74 font pairings, 25
+  chart types, etc.), then run directly with `python3` and the documented
+  `--design-system --persist` flags. No plugin-marketplace install was needed
+  (`ui-ux-pro-max@ui-ux-pro-max-skill` was not in
+  `~/.claude/plugins/installed_plugins.json`, only `superpowers` was) — the
+  skill's files were already materialized under the Skill tool's own plugin
+  runtime directory, and `search.py --help` confirmed a fully working CLI with
+  real CSV-backed data behind it, so that was used as-is rather than layering
+  on a redundant CLI install.
+- **Query wording changed which BI/Analytics style the generator picked, so
+  it was iterated deliberately rather than accepted on the first run.** The
+  first pass (`"fantasy football analytics predictive dashboard data-dense
+  probability forecasting"`) matched the **Data-Dense Dashboard** style, not
+  PLAN.md's called-out best fit. Re-run with keywords weighted toward
+  `"predictive analytics forecasting probability confidence intervals"`
+  correctly matched **Predictive Analytics** (forecast lines, confidence
+  intervals, trend projections, scenario modeling) — the right neighborhood
+  per PLAN.md and the better fit for an app whose entire output is
+  probability. Confirmed **Comparative Analysis Dashboard** and **Data-Dense
+  Dashboard** both exist and were considered as secondary neighbors via
+  `--domain style` lookups, but Predictive Analytics was kept as primary
+  since forecast/confidence-band visual language matches this app's actual
+  content (title odds, playoff odds, finish distributions) more directly than
+  a generic KPI-grid framing.
+- **Dials: `--density 8` (dashboard-tight spacing, 2px-32px scale),
+  `--variance 4` (balanced/modern, not bold/asymmetric), `--motion 3`
+  (subtle, scroll-reveal only).** Density 8 because this is explicitly a
+  data-dense predictive dashboard per the brief, not a marketing page.
+  Variance kept mid rather than high because a forecasting tool's credibility
+  depends on the data reading clearly, not on bold/asymmetric layout risk.
+  Motion kept low (subtle fade/scroll-reveal, no complex choreography)
+  because the primary use case is a quick weekly check-in on a phone during a
+  game, not an immersive first-visit experience.
+- **Color palette accepted as generated: primary `#1E40AF` (blue), accent
+  `#D97706` (amber, auto-adjusted by the tool from `#F59E0B` for a 3:1 WCAG
+  contrast requirement), destructive `#DC2626` (red).** Blue-forward with an
+  amber highlight is exactly the "trend/forecast vs. actual" pairing the
+  Predictive Analytics style calls for, and leaves red free and unambiguous
+  for risk/negative-delta indicators in the risk panel and trade-asymmetry
+  framing (Phase 6), rather than overloading it as the primary brand color.
+- **Typography accepted as generated: Fira Code (headings) + Fira Sans
+  (body).** A monospace heading face is an unusual choice for a consumer app
+  but fits a "precise, technical, data" mood better than a humanist sans for
+  a probability-first tool where numbers (odds, percentages, point
+  projections) are the primary content — tabular figures in a monospace-style
+  face read as more trustworthy for exact numeric comparison, which is this
+  app's whole job.
+- **The generator's "Page Pattern" section is present in `MASTER.md` verbatim
+  (`AI Personalization Landing`, from the tool's landing-page domain) but
+  annotated in-place as non-governing.** `--design-system` always fills this
+  section in from `landing.csv` even for a pure authenticated app dashboard
+  with no marketing funnel — confirmed via `--domain product "fantasy sports
+  analytics dashboard"`, whose own "Analytics Dashboard" product-type match
+  says `Landing Page Pattern: N/A - Analytics focused`. Rather than silently
+  deleting or hand-editing the tool's real output (which would misrepresent
+  what the generator actually said), the section was kept intact with an
+  explicit editorial note directing Phase 5b to the Style/Color/
+  Typography/Component/Chart sections instead.
+- **Chart recommendations queried separately per PLAN.md's explicit
+  instruction, via two `--domain chart` searches** (one for
+  "probability distribution confidence interval range forecast", one for
+  "ranked comparison leaderboard ranking teams odds percentage"), plus one
+  `--stack shadcn` query for chart-component integration guidance. Recorded
+  as a new `## Chart Recommendations` section in `MASTER.md`: **Box Plot**
+  for finish-position spread per team and **Line with Confidence Band** for
+  any trajectory/projection-over-time view, both for the
+  probability/distribution problem; **horizontal Bar Chart, sorted
+  descending** for power rankings ordered by simulated title probability;
+  and shadcn's `ChartContainer`/`chartConfig`/`ChartTooltip` wrapper pattern
+  over raw Recharts, per the stack-specific guidance. This directly answers
+  PLAN.md's stated core visual problem — showing shape, not a bare
+  percentage — and gives 5b concrete chart types to build against instead of
+  re-deriving them.
+- **Persisted path corrected from the tool's default
+  `design-system/<project-slug>/MASTER.md` (`design-system/fantavo/MASTER.md`
+  and `design-system/fantavo/pages/`) to the flat `design-system/MASTER.md`
+  and `design-system/pages/` PLAN.md's later phases actually reference**
+  (Phase 6: "Check for `design-system/pages/whatif.md`"). The generator's own
+  `--persist` help text nests output under a project-slug subfolder by
+  default; every later phase in PLAN.md reads the flat path, so the
+  generated files were moved (not regenerated) immediately after persisting,
+  and the empty `pages/` directory kept with a `.gitkeep` so it survives the
+  commit for later phases' page-specific overrides.
+- No `Makefile` exists yet (same gap Phases 0-4 already noted) — this phase
+  needed no test/typecheck/lint run since it touches no application code,
+  only a design-token markdown file and a decisions-log entry.
