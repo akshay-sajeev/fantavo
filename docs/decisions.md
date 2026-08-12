@@ -376,3 +376,177 @@ One line per non-obvious choice and why. Appended at the end of each phase.
   `ingest/tests/test_db.py`, or the `db/migrations/` SQL. Full suite:
   `pytest -q` is 79 passed (74 from Phases 0-2 plus 5 new in
   `ingest/tests/test_db.py`).
+
+## Phase 4 — API
+
+- **Pre-draft blocker, same precedent as Phase 2, applied to the DB layer
+  this time.** `fixtures/league_raw_2026.json`'s real league still has zero
+  drafted rosters, so `sim.api.params_loader.load_league` (which calls the
+  real `ingest.parse.build_team_params` per team) genuinely cannot build a
+  `LeagueParams` for it -- confirmed live: running the precompute job against
+  it raises/skips with `RosterNotAvailableError`. Phase 4's done criterion
+  needs *some* ingested league with a real `TeamParams` to curl against, so
+  `scripts/ingest_synthetic_league.py` builds one: it reuses the identical
+  snake draft `sim/params/mock_rosters.py` already runs for Phase 2's
+  validation league (see `draft_mock_rosters`, factored out of
+  `build_mock_league` for this reuse -- not a second draft implementation),
+  then assembles a raw-ESPN-shaped payload (real `settings`, real
+  `_freeAgents`, but `teams[].roster.entries` populated with those draft
+  picks) and ingests it through the **real** `ingest.db.ingest_league` --
+  not a shortcut around persistence, the actual production write path. The
+  league is stored under `league_id = -1_990_001`
+  (`scripts.ingest_synthetic_league.SYNTHETIC_LEAGUE_ID`), negative and
+  therefore impossible for any real ESPN league to collide with, and named
+  `"SYNTHETIC validation league (mock draft -- not a real league)"` with
+  every team individually labelled `"... (SYNTHETIC -- validation only)"`,
+  matching the unmistakability discipline Phase 2 established. This script
+  is a local verification/dev tool (like `ingest/db.py`'s own `_main`), not
+  wired into the API or into any user-facing code path.
+- **Params-loading module (`sim/api/params_loader.py`) does not read
+  `mean`/`sd`/`availability` back out of the normalized `player` table at
+  all.** It reads `league.raw_payload` (the full raw ESPN JSON, stored
+  verbatim by Phase 3) and re-runs the exact same pipeline every other
+  phase already uses on it: `ingest.parse.parse_scoring_table` /
+  `parse_player_pool` / `parse_teams` / `parse_schedule` /
+  `build_team_params`, plus `sim.params.variance.fit_position_cv` and
+  `sim.params.derive.derive_player_params_pool`. This is the
+  "reprocessed without re-fetching" pattern CLAUDE.md's JSONB storage
+  convention exists for, and it means the API contains **zero** independent
+  parameter-derivation logic -- if API results ever diverged from a
+  fixture-file run, that would be a bug in this thin loader, never a
+  competing implementation of `ingest.parse` or `sim.params`. The one
+  consequence: a league whose real roster isn't drafted yet still correctly
+  raises `RosterNotAvailableError` through this path (verified against the
+  real fixture above), exactly as it does for a fresh file-based run.
+- **Cache storage: a new `simulation_cache` JSONB table
+  (`db/migrations/0002_create_simulation_cache.sql`), one row per
+  `(league_id, season_id)`, upserted in place** -- the natural fit per
+  CLAUDE.md's existing JSONB-alongside-normalized-tables convention, no
+  reason to deviate. Stores `n_sims`, `seed` and `computed_at` alongside the
+  serialized `SimulationResult` (`sim/api/cache.py::serialize_result`) so a
+  cached response is fully self-describing: a caller can see exactly which
+  seed and sim count produced it without cross-referencing anything else.
+  `serialize_result` keeps every per-team distribution
+  (`finish_distribution` included), never collapsing to a bare scalar --
+  CLAUDE.md's "distributions, not point estimates" rule applies to this
+  response shape, not just to the sampling inside `simulate_seasons()`.
+- **Seeding strategy (`sim/api/seeds.py`), two different rules for two
+  different call sites, both explicit and documented in one place:**
+  - Precomputed cache: `precompute_seed(league_id, season_id)` is a fixed,
+    deterministic formula (`(league_id * 1_000_003 + season_id) %
+    (2**32 - 1)`) -- not wall-clock-derived, not a per-league hardcoded
+    constant. The same league always gets the same seed on any machine, at
+    any time, which is exactly what makes "curl returns the same title odds
+    as a direct engine call with the same seed" checkable rather than a
+    one-off coincidence. The seed is always returned in the response's
+    `seed` field and stored in `simulation_cache.seed`.
+  - Live what-if: the caller may pass an explicit `seed` in the request
+    body for a reproducible re-run; otherwise `draw_whatif_seed()` draws 32
+    bits from `secrets.randbits` (OS entropy, same source
+    `numpy.random.SeedSequence` itself would draw from) and returns the
+    drawn value in the response. Never a bare, unseeded
+    `np.random.default_rng()` call anywhere -- every `rng` construction
+    site in `sim/api` has a traceable seed integer.
+- **Scheduling library: APScheduler's `BackgroundScheduler`, not
+  Celery/RQ/cron.** This is a single-process FastAPI service with no
+  existing task queue or worker infrastructure; `BackgroundScheduler` runs
+  an in-process thread alongside uvicorn with zero additional moving parts
+  (no broker, no separate worker process) -- the right amount of
+  infrastructure for this project's current single-instance scale. Runs
+  `sim.api.precompute.precompute_all_leagues` immediately on API startup
+  (so a freshly started service isn't serving an empty cache for a full
+  interval) and then every 6 hours (`PRECOMPUTE_INTERVAL_HOURS`, a
+  documented operational choice, not a fitted parameter). Explicitly noted
+  as **not** safe for multiple API replicas (would N-times-run the job) --
+  revisit with a real queue or DB-scheduled job if this service ever scales
+  out horizontally.
+- **`precompute_all_leagues` iterates every row in the `league` table and
+  skips (with a log line, not a crash) any league that raises
+  `RosterNotAvailableError`/`IngestError`/`ParamsError`** -- e.g. the real,
+  still-pre-draft league. Verified live: running the job against
+  `fantavo_dev` (with both the real league and the synthetic league
+  ingested) produced exactly one cache row, for the synthetic league; the
+  real league logged a skip with the same `RosterNotAvailableError` message
+  `build_team_params` has always raised for it.
+- **Route handlers accept an optional `season_id`** (query param on GET,
+  body field on POST) rather than hardcoding one, because this schema's
+  grain is `(league_id, season_id)` (Phase 3's deliberate choice), while
+  the plan's URL shape (`/league/{id}/...`) has no season in it. When
+  omitted, `params_loader.resolve_season_id` picks the most recently
+  ingested season for that `league_id` (`MAX(season_id)`) rather than
+  guessing or erroring -- for the single-season-per-league-in-dev case this
+  phase and Phase 3 both operate under, that is unambiguous.
+- **No connection pool.** `sim/api/app.py` opens one `psycopg` connection
+  per request (via a FastAPI dependency, closed after the request) rather
+  than adding `psycopg_pool` or a shared long-lived connection. At this
+  project's current traffic scale (a single local dev user) the overhead is
+  negligible and it avoids introducing pool lifecycle/sizing decisions this
+  phase doesn't need yet; revisit if/when this becomes a real service under
+  concurrent load.
+- **What-if roster overrides are validated against the league's real
+  ingested player pool, not against any fixed roster shape.** Every
+  `player_id` in `roster_overrides` must resolve inside
+  `LoadedLeague.players_by_id` (i.e. have a real derived `PlayerParams` for
+  this league/season) or the request 422s with the specific unknown id --
+  CLAUDE.md's "no invented numbers" rule applied to the HTTP layer: an
+  unknown player is refused, never silently substituted or ignored. Full
+  starting-lineup-shape validation (right position counts, right slot
+  eligibility) is explicitly left to Phase 6's fuller trade/what-if UI, not
+  duplicated here.
+- **Error mapping, kept deliberately small:** `LeagueNotIngestedError` -> 404
+  (league/season not in Postgres, or no cache row yet for GET);
+  `IngestError`/`ParamsError` subclasses -> 409 (data exists but can't be
+  turned into `LeagueParams` yet, e.g. no drafted roster); an unknown
+  `roster_overrides` player id -> 422. Anything else propagates as FastAPI's
+  default 500 rather than being caught and reshaped -- this phase doesn't
+  try to anticipate every failure mode, only the ones CLAUDE.md's "no
+  invented numbers" rule specifically requires surfacing clearly.
+- **Test suite (`sim/tests/test_api_*.py`, `sim/tests/conftest.py`) follows
+  Phase 3's exact skip-if-Postgres-unreachable convention**, reusing
+  `ingest.db.DEFAULT_TEST_DSN` / `fantavo_test`, with a new shared
+  `synthetic_league_id` fixture that ingests the SYNTHETIC league through
+  the real `ingest_league` path once per test. One test
+  (`test_load_league_matches_build_mock_league_rosters_exactly`) needed
+  `pytest.approx(rel=1e-9)` instead of `==` for player `mean`/`sd`: Postgres
+  JSONB does not guarantee bit-exact float64 round-tripping (it stores
+  numeric literals as normalized text, not as an IEEE754 bit pattern), so a
+  float that crosses the JSONB storage boundary can differ from its
+  pre-storage value by roughly 1 ULP. This does not threaten the actual done
+  criterion, because that comparison (see next point) never crosses that
+  boundary asymmetrically -- both sides read the same stored row.
+- **Done criterion, verified twice:** an automated HTTP-level test
+  (`sim/tests/test_api_app.py::test_get_simulation_matches_a_direct_engine_call_with_the_same_seed`,
+  via Starlette's `TestClient` driving the real ASGI app) and a live manual
+  run against `fantavo_dev` with `uvicorn` actually listening on
+  `127.0.0.1:8123`: `scripts/ingest_synthetic_league.py` ingested
+  `league_id=-1990001`, `python -m sim.api.precompute` cached it with
+  `seed=2857856903, n_sims=10000`, `curl
+  http://127.0.0.1:8123/league/-1990001/simulation?season_id=2026` returned
+  that exact seed and a per-team title-odds/finish-distribution array, and a
+  separate direct `simulate_seasons()` call (loading params via
+  `sim.api.params_loader.load_league` against the same DSN, same seed, same
+  `n_sims`) reproduced every value bit-for-bit (`title odds match exactly:
+  True`, `finish distributions match exactly: True`). Strongest team's title
+  odds landed at 27.47%, consistent with Phase 2's own sanity-checked range
+  for this same synthetic draft (27.5% at a different, also-deterministic
+  seed) -- another cross-check that nothing in the DB round-trip silently
+  changed the modelled distributions.
+- **New dependencies (no `requirements.txt` exists yet, same ad hoc `pip3
+  install` pattern Phases 0-3 used): `fastapi`, `uvicorn`, `apscheduler`,
+  `httpx`** (the last only for `fastapi.testclient.TestClient` in tests,
+  which depends on it). Added a `[[tool.mypy.overrides]]` for
+  `apscheduler.*` in `pyproject.toml` (`ignore_missing_imports = true`) --
+  it ships no `py.typed` marker or stubs, and this repo calls only a
+  handful of well-documented methods on it (`add_job`, `start`,
+  `shutdown`), not worth vendoring stubs for.
+- `mypy --strict sim ingest` and `ruff check sim ingest db scripts` both
+  show exactly the same pre-existing findings prior phases already
+  documented (20 `sim/engine.py` `ndarray`/`Any` gaps, 1 pre-existing
+  `sim/tests/test_engine.py` `dict` type-arg gap, 3 `TRY004` findings in
+  `ingest/parse.py`/`ingest/scoring.py`) -- zero new findings anywhere under
+  `sim/api/`, `sim/tests/test_api_*.py`, `sim/tests/conftest.py`, or
+  `scripts/ingest_synthetic_league.py`. Full suite: `pytest -q` is 109
+  passed (79 from Phases 0-3 plus 30 new: 7 in `test_api_seeds.py`, 5 in
+  `test_api_synthetic_ingest.py`, 5 in `test_api_params_loader.py`, 3 in
+  `test_api_cache.py`, 3 in `test_api_precompute.py`, 7 in
+  `test_api_app.py`).

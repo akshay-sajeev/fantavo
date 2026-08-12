@@ -1,0 +1,213 @@
+"""Thin FastAPI service exposing `simulate_seasons()` over HTTP.
+
+Every route handler here does exactly three things: parse the request, load
+params (`sim.api.params_loader`, ultimately backed by `ingest.parse` +
+`sim.params` against an already-ingested league), and call
+`sim.engine.simulate_seasons()`. No analytics or derivation logic lives in
+this module -- CLAUDE.md's "one simulation engine" and "no analytics logic
+in route handlers" rules both apply directly here.
+
+    GET  /league/{league_id}/simulation   cached precomputed results
+    POST /league/{league_id}/whatif       live, n_sims=2000, roster overrides
+
+Both routes accept the ingest schema's real grain: an optional `season_id`
+(query param on GET, body field on POST). If omitted, the most recently
+ingested season for that league is used (see
+`params_loader.resolve_season_id`) -- the plan's URL shape has no season in
+it, but `league_id` alone is not a primary key in this schema (Phase 3 keyed
+everything by (league_id, season_id) on purpose).
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from typing import Any
+
+import numpy as np
+import psycopg
+from fastapi import Depends, FastAPI, HTTPException
+from pydantic import BaseModel, Field
+
+from ingest.db import DEFAULT_DEV_DSN, connect, dsn_from_env
+from ingest.errors import IngestError
+from sim.api.cache import read_cached_simulation, serialize_result
+from sim.api.params_loader import LeagueNotIngestedError, load_league, resolve_season_id
+from sim.api.scheduler import start_scheduler
+from sim.api.seeds import draw_whatif_seed
+from sim.engine import PlayerParams, simulate_seasons
+from sim.params.errors import ParamsError
+
+logger = logging.getLogger(__name__)
+
+LIVE_WHATIF_N_SIMS = 2_000
+
+# Errors that mean "the request can't be satisfied with real data" rather
+# than a server bug -- translated to a 4xx with the original message instead
+# of a bare 500, per CLAUDE.md's "no invented numbers: raise and say so"
+# rule applied to the HTTP layer.
+_DATA_UNAVAILABLE_ERRORS = (IngestError, ParamsError)
+
+
+class TeamOutcome(BaseModel):
+    """One team's simulated outcome distribution -- never a bare scalar.
+    `finish_distribution[p]` is the probability of finishing in place `p`
+    (0 = champion), matching `sim.engine.SimulationResult.finish_distribution`.
+    """
+
+    team_id: int
+    team_name: str
+    title_probability: float
+    playoff_probability: float
+    reached_final_probability: float
+    mean_wins: float
+    mean_points_for: float
+    finish_distribution: list[float]
+
+
+class SimulationResponse(BaseModel):
+    league_id: int
+    season_id: int
+    n_sims: int
+    seed: int
+    computed_at: datetime
+    teams: list[TeamOutcome]
+
+
+class WhatIfRequest(BaseModel):
+    season_id: int | None = None
+    # team_id -> ordered list of player_ids to use as that team's starters
+    # instead of its ingested roster. Every player_id must already have a
+    # derived PlayerParams for this league/season (i.e. be in the ingested
+    # free-agent/player pool) -- see the 422 raised below otherwise.
+    roster_overrides: dict[int, list[int]] = Field(default_factory=dict)
+    n_sims: int = LIVE_WHATIF_N_SIMS
+    # Explicit seed for a reproducible re-run of this exact scenario. Drawn
+    # from OS entropy (sim.api.seeds.draw_whatif_seed) if omitted -- see
+    # that module's docstring for the full seeding rationale.
+    seed: int | None = None
+
+
+def _to_response(
+    league_id: int,
+    season_id: int,
+    seed: int,
+    computed_at: datetime,
+    result_dict: dict[str, Any],
+) -> SimulationResponse:
+    return SimulationResponse(
+        league_id=league_id,
+        season_id=season_id,
+        n_sims=result_dict["n_sims"],
+        seed=seed,
+        computed_at=computed_at,
+        teams=[TeamOutcome(**t) for t in result_dict["teams"]],
+    )
+
+
+_scheduler: Any = None
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    global _scheduler
+    _scheduler = start_scheduler()
+    try:
+        yield
+    finally:
+        if _scheduler is not None:
+            _scheduler.shutdown(wait=False)
+            _scheduler = None
+
+
+app = FastAPI(title="fantavo sim API", lifespan=lifespan)
+
+
+def get_dsn() -> str:
+    return dsn_from_env("DATABASE_URL", DEFAULT_DEV_DSN)
+
+
+def get_connection(dsn: str = Depends(get_dsn)) -> Iterator[psycopg.Connection[Any]]:
+    conn = connect(dsn)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+@app.get("/league/{league_id}/simulation", response_model=SimulationResponse)
+def get_simulation(
+    league_id: int,
+    season_id: int | None = None,
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> SimulationResponse:
+    try:
+        resolved_season_id = resolve_season_id(conn, league_id, season_id)
+    except LeagueNotIngestedError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    cached = read_cached_simulation(conn, league_id, resolved_season_id)
+    if cached is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"no precomputed simulation cached for league_id={league_id} "
+                f"season_id={resolved_season_id} yet -- the scheduled precompute job "
+                "has not run for this league (it may not have a drafted roster yet)"
+            ),
+        )
+    return _to_response(
+        league_id, resolved_season_id, cached.seed, cached.computed_at, cached.result
+    )
+
+
+@app.post("/league/{league_id}/whatif", response_model=SimulationResponse)
+def post_whatif(
+    league_id: int,
+    req: WhatIfRequest,
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> SimulationResponse:
+    try:
+        resolved_season_id = resolve_season_id(conn, league_id, req.season_id)
+        loaded = load_league(conn, league_id, resolved_season_id)
+    except LeagueNotIngestedError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except _DATA_UNAVAILABLE_ERRORS as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    overrides: dict[int, tuple[PlayerParams, ...]] = {}
+    for team_id, player_ids in req.roster_overrides.items():
+        starters: list[PlayerParams] = []
+        for player_id in player_ids:
+            params = loaded.players_by_id.get(player_id)
+            if params is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"roster_overrides references player_id={player_id} for "
+                        f"team_id={team_id}, which has no ingested projection for "
+                        f"league_id={league_id} season_id={resolved_season_id} -- "
+                        "refusing to fabricate one"
+                    ),
+                )
+            starters.append(params)
+        overrides[team_id] = tuple(starters)
+
+    seed = req.seed if req.seed is not None else draw_whatif_seed()
+    rng = np.random.default_rng(seed)
+    try:
+        result = simulate_seasons(
+            loaded.league,
+            n_sims=req.n_sims,
+            rng=rng,
+            roster_overrides=overrides or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    computed_at = datetime.now(timezone.utc)
+    return _to_response(
+        league_id, resolved_season_id, seed, computed_at, serialize_result(result)
+    )

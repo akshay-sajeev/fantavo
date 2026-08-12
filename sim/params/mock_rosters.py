@@ -94,6 +94,53 @@ def _eligible(slot_id: int, projection: PlayerProjection) -> bool:
     return projection.default_position_id == _SLOT_TO_DEFAULT_POSITION[slot_id]
 
 
+def draft_mock_rosters(
+    raw: Mapping[str, Any],
+    player_pool: tuple[PlayerProjection, ...],
+    n_mock_teams: int = 10,
+) -> tuple[tuple[tuple[int, int], ...], ...]:
+    """Run the mock snake draft and return, per team index, a tuple of
+    (player_id, lineup_slot_id) -- the roster *assignments*, before any
+    PlayerParams are resolved.
+
+    Pulled out of `build_mock_league` as its own function so the exact same
+    draft (not a reimplementation of it) can back other consumers that need
+    the assignment's lineupSlotId too -- e.g. building a synthetic raw ESPN
+    payload with populated `teams[].roster.entries` for a Phase 4 API
+    verification league, which needs slot ids that `build_mock_league`
+    itself discards once it has resolved each pick to a PlayerParams.
+    """
+    if n_mock_teams % 2 != 0:
+        raise ValueError(f"n_mock_teams must be even for round_robin_schedule, got {n_mock_teams}")
+    if n_mock_teams > len(_MOCK_TEAM_LETTERS):
+        raise ValueError(f"n_mock_teams too large to letter uniquely: {n_mock_teams}")
+
+    rounds = _draft_rounds(raw)
+
+    drafted: set[int] = set()
+    rosters: list[list[tuple[int, int]]] = [[] for _ in range(n_mock_teams)]
+
+    for round_index, slot_id in enumerate(rounds):
+        # True continuous snake draft: direction alternates by round, and the
+        # team that picked last in a round picks first in the next.
+        order = range(n_mock_teams) if round_index % 2 == 0 else range(n_mock_teams - 1, -1, -1)
+        for team_index in order:
+            candidates = [
+                p for p in player_pool if p.player_id not in drafted and _eligible(slot_id, p)
+            ]
+            if not candidates:
+                raise ValueError(
+                    f"mock draft ran out of eligible players for lineupSlotId="
+                    f"{slot_id} in round {round_index} -- player pool too small "
+                    "for n_mock_teams"
+                )
+            best = max(candidates, key=lambda p: p.mean_points_per_game)
+            drafted.add(best.player_id)
+            rosters[team_index].append((best.player_id, slot_id))
+
+    return tuple(tuple(roster) for roster in rosters)
+
+
 def build_mock_league(
     raw: Mapping[str, Any],
     player_pool: tuple[PlayerProjection, ...],
@@ -114,13 +161,6 @@ def build_mock_league(
     fabricate them. `players_by_id` must already hold real PlayerParams for
     every player in `player_pool` (see sim.params.derive).
     """
-    if n_mock_teams % 2 != 0:
-        raise ValueError(f"n_mock_teams must be even for round_robin_schedule, got {n_mock_teams}")
-    if n_mock_teams > len(_MOCK_TEAM_LETTERS):
-        raise ValueError(f"n_mock_teams too large to letter uniquely: {n_mock_teams}")
-
-    rounds = _draft_rounds(raw)
-
     missing = [p.player_id for p in player_pool if p.player_id not in players_by_id]
     if missing:
         raise ValueError(
@@ -128,26 +168,7 @@ def build_mock_league(
             f"players_by_id, e.g. player_id={missing[0]}"
         )
 
-    drafted: set[int] = set()
-    rosters: list[list[int]] = [[] for _ in range(n_mock_teams)]
-
-    for round_index, slot_id in enumerate(rounds):
-        # True continuous snake draft: direction alternates by round, and the
-        # team that picked last in a round picks first in the next.
-        order = range(n_mock_teams) if round_index % 2 == 0 else range(n_mock_teams - 1, -1, -1)
-        for team_index in order:
-            candidates = [
-                p for p in player_pool if p.player_id not in drafted and _eligible(slot_id, p)
-            ]
-            if not candidates:
-                raise ValueError(
-                    f"mock draft ran out of eligible players for lineupSlotId="
-                    f"{slot_id} in round {round_index} -- player pool too small "
-                    "for n_mock_teams"
-                )
-            best = max(candidates, key=lambda p: p.mean_points_per_game)
-            drafted.add(best.player_id)
-            rosters[team_index].append(best.player_id)
+    rosters = draft_mock_rosters(raw, player_pool, n_mock_teams)
 
     schedule_settings = raw["settings"]["scheduleSettings"]
     n_regular_weeks = schedule_settings["matchupPeriodCount"]
@@ -157,7 +178,7 @@ def build_mock_league(
         TeamParams(
             team_id=i,
             name=f"Mock Team {_MOCK_TEAM_LETTERS[i]} (SYNTHETIC -- validation only)",
-            starters=tuple(players_by_id[pid] for pid in roster),
+            starters=tuple(players_by_id[pid] for pid, _slot_id in roster),
         )
         for i, roster in enumerate(rosters)
     )

@@ -6,5 +6,12 @@ testpaths = ["sim/tests", "ingest/tests"]
 strict = true
 plugins = ["numpy.typing.mypy_plugin"]
 
+# APScheduler ships no py.typed marker / stubs (see sim/api/scheduler.py).
+# Everything this repo calls on it is a handful of well-documented methods
+# (add_job, start, shutdown) -- not worth vendoring or writing stubs for.
+[[tool.mypy.overrides]]
+module = "apscheduler.*"
+ignore_missing_imports = true
+
 [tool.ruff]
 line-length = 96
