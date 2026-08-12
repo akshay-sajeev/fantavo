@@ -22,6 +22,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,15 @@ PII_KEYS = {"firstName", "lastName", "displayName", "email", "notificationSettin
 # Keys that could carry credentials. These are dropped outright.
 SECRET_KEYS = {"espn_s2", "espnS2", "SWID", "swid", "cookie", "Cookie", "authorization"}
 
+# ESPN references league members by SWID-shaped GUID. These appear as dict values
+# (members[].id) but ALSO as bare strings inside lists (teams[].owners) and as
+# plain fields (teams[].primaryOwner). Your own SWID is one of them, so any
+# scrubber that only inspects dict keys will leak your live session token.
+_GUID_RE = re.compile(
+    r"^\{?[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
+    r"[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}?$"
+)
+
 
 def _pseudonym(value: str, prefix: str) -> str:
     """Stable fake value, so the same person maps consistently across a fixture."""
@@ -63,8 +73,12 @@ def _pseudonym(value: str, prefix: str) -> str:
     return f"{prefix}_{digest}"
 
 
-def scrub(node: Any, _path: str = "") -> Any:
-    """Recursively remove credentials and pseudonymize personal data."""
+def scrub(node: Any) -> Any:
+    """Recursively remove credentials and pseudonymize personal data.
+
+    GUIDs are pseudonymized deterministically, so teams[].owners still resolves
+    to the matching members[].id in the saved fixture.
+    """
     if isinstance(node, dict):
         out: dict[str, Any] = {}
         for key, value in node.items():
@@ -72,26 +86,42 @@ def scrub(node: Any, _path: str = "") -> Any:
                 continue
             if key in PII_KEYS:
                 out[key] = _pseudonym(str(value), key) if isinstance(value, str) else None
-            elif key == "id" and isinstance(value, str) and value.startswith("{"):
-                # ESPN member ids are SWID-shaped GUIDs tied to a real account.
-                out[key] = _pseudonym(value, "member")
             else:
-                out[key] = scrub(value, f"{_path}.{key}")
+                out[key] = scrub(value)
         return out
     if isinstance(node, list):
-        return [scrub(item, _path) for item in node]
+        return [scrub(item) for item in node]
+    if isinstance(node, str) and _GUID_RE.match(node):
+        return _pseudonym(node, "member")
     return node
+
+
+def find_leaks(node: Any, secrets: list[str], path: str = "$") -> list[str]:
+    """Locate surviving credentials by JSON path, without echoing their values."""
+    hits: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            hits += find_leaks(value, secrets, f"{path}.{key}")
+    elif isinstance(node, list):
+        for i, value in enumerate(node):
+            hits += find_leaks(value, secrets, f"{path}[{i}]")
+    elif isinstance(node, str):
+        hits += [path for s in secrets if s and s in node]
+    return hits
 
 
 def assert_clean(payload: Any, secrets: list[str]) -> None:
     """Last line of defence: fail loudly rather than commit a live session token."""
-    blob = json.dumps(payload)
-    for secret in secrets:
-        if secret and secret in blob:
-            raise SystemExit(
-                "ABORT: a credential survived scrubbing and would have been written "
-                "to disk. Not saving. Check the SECRET_KEYS list in this script."
-            )
+    leaks = find_leaks(payload, secrets)
+    if leaks:
+        shown = "\n  ".join(sorted(set(leaks))[:10])
+        raise SystemExit(
+            "ABORT: a credential survived scrubbing and would have been written to "
+            f"disk. Nothing was saved.\n\nFound at:\n  {shown}\n\n"
+            "Add the offending key to SECRET_KEYS or PII_KEYS in this script, or "
+            "extend scrub() to cover that shape. Do not work around this by "
+            "disabling the check."
+        )
 
 
 def load_env() -> dict[str, str]:
