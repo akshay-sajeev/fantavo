@@ -223,3 +223,156 @@ One line per non-obvious choice and why. Appended at the end of each phase.
   `sim/params/tests/` package, since `pyproject.toml`'s `testpaths` already
   covers `sim/tests` and adding a new discovery root wasn't necessary.
   `sim/tests/test_engine.py` and its golden values were not touched.
+
+## Phase 3 — Persistence
+
+- **Local Postgres via Homebrew, exactly as the project owner pre-approved.**
+  Ran `brew install postgresql@16` (no Docker/Postgres binary existed on this
+  machine), `brew services start postgresql@16` to run it as a background
+  launchd service, then `createdb fantavo_dev` and `createdb fantavo_test` --
+  two separate databases so the idempotency test can truncate/own
+  `fantavo_test` freely without disturbing a "real" local dev database.
+  Connection is over the default Unix socket with peer auth (no password),
+  so no secret handling is involved in DB connectivity at all.
+- **DB client: `psycopg` (v3, with the `[binary]` extra) over `psycopg2` or
+  an ORM (SQLAlchemy).** Chose psycopg3 for native type stubs (works cleanly
+  under `mypy --strict` without a third-party stub package, unlike
+  psycopg2), and no ORM because this phase's tables are a direct 1:1 mapping
+  from `ingest.models` dataclasses to rows -- an ORM's mapping layer would
+  duplicate types that already exist in `ingest/models.py` and `sim/engine.py`
+  for no benefit at this scale, consistent with CLAUDE.md's "dataclasses
+  over dicts" preference for domain objects rather than framework objects.
+  Installed via `pip3 install "psycopg[binary]"`; no `requirements.txt` or
+  `[project.dependencies]` exists yet in this repo (Phase 0-2 installed
+  numpy/pytest/requests the same ad hoc way), so this phase follows the same
+  pattern rather than introducing a new dependency-management convention
+  unilaterally.
+- **Migration tool: hand-rolled, not Alembic.** `db/migrations/*.sql` are
+  plain numbered SQL files; `ingest.db.run_migrations` tracks which have
+  been applied in a `schema_migrations` table and applies the rest in
+  filename order, inside a transaction. For a single-developer project with
+  one migration so far, Alembic's autogeneration/versioning machinery is
+  overhead the repo doesn't need yet -- this can be swapped in later without
+  changing the schema itself if migrations get complex enough to want it.
+- **Schema grain is `(league_id, season_id, ...)` throughout**, not just
+  `league_id`. A league's scoring settings, teams and player pool are all
+  season-specific in ESPN's own data model (confirmed by this fixture:
+  `seasonId` gates which stat block counts as "the" projection in
+  `ingest.parse._find_season_projection`), and Phase 11 is already known to
+  need multiple seasons per league (`leagueHistory`) -- keying everything by
+  league_id alone would make that phase's very first write collide with
+  this one.
+- **`ingested_at` is a required argument to `ingest_league`, never a
+  server-side `now()` default.** This is the load-bearing decision for the
+  "byte-identical" done criterion: CLAUDE.md already requires every
+  stochastic function to take an explicit `rng` instead of implicit global
+  state (for reproducibility); the same reasoning applies to wall-clock time
+  here -- an implicit `now()` would make two ingests of the identical
+  fixture always differ by at least that one column, and "byte-identical"
+  would be unachievable by construction, not just hard to test. A real
+  ingest run (see `ingest/db.py`'s `_main` CLI) still passes
+  `datetime.now(timezone.utc)`, once, itself, at the call site -- it's the
+  library function that must not reach for it internally.
+- **Idempotency strategy: upsert for the two singleton tables (`league`,
+  `scoring_settings`, one row per league/season, via `INSERT ... ON
+  CONFLICT DO UPDATE`), full delete-then-insert per league/season for the
+  four child tables (`team`, `player`, `roster`, `matchup`).** Delete+insert
+  was chosen over a more surgical `ON CONFLICT` upsert-plus-diff for the
+  child tables because it is trivially correct for the "overwrites cleanly"
+  requirement in CLAUDE.md's conventions: a player who drops out of the
+  free-agent pool, or a roster entry that's removed, cannot leave a stale
+  row behind, because nothing survives between the DELETE and the INSERT
+  within the same transaction. Verified directly with a synthetic
+  two-player fixture re-ingested with one player removed
+  (`test_ingest_league_cleanly_removes_stale_child_rows`) -- the stale
+  player's row is gone after the second ingest, not just unreferenced.
+- **How the idempotency test actually verifies byte-identical state:**
+  `ingest.db.canonical_dump(conn)` runs `SELECT * ... ORDER BY <all
+  columns>` against every data table (`league`, `scoring_settings`, `team`,
+  `player`, `roster`, `matchup`), serializes each row as
+  `json.dumps(..., sort_keys=True, default=str)`, and joins everything into
+  one `bytes` value. The test calls `ingest_league` twice with the identical
+  fixture and the identical fixed `ingested_at`, taking a `canonical_dump`
+  after each call, and asserts the two dumps compare equal with plain `==`
+  -- a literal byte-for-byte comparison of a canonical serialization of
+  every row in every table, not a row-count check or a hash. `sort_keys=True`
+  matters specifically because Postgres's `jsonb` storage does not preserve
+  the original key order of a stored JSON object (it reorders internally),
+  so without it two runs with byte-identical *content* could still produce
+  differently-ordered dict keys as a pure artifact of `jsonb` storage and
+  falsely fail the comparison. A companion test
+  (`test_reingesting_with_a_different_ingested_at_changes_the_dump`) proves
+  the dump isn't vacuously equal for any two runs -- it does change when a
+  real difference (a later `ingested_at`) is introduced, so the "identical"
+  result in the actual idempotency test is meaningful, not a comparison that
+  can never fail.
+- **`canonical_dump`'s `ORDER BY` clause uses ordinal positions (`ORDER BY
+  1, 2, 3, 4, 5`)** rather than named primary-key columns, so the same
+  function works across tables with different schemas without a per-table
+  branch. Every data table's first two columns are `(league_id, season_id)`
+  and every table has at least 5 columns, so this is a safe, deterministic
+  ordering everywhere it's used, not table-specific tuning.
+- **Raw JSONB is stored at two grains, not one:** the full raw fixture
+  payload on `league.raw_payload` (so the entire normalization pipeline can
+  be rerun from scratch without re-fetching), *and* a narrower raw slice per
+  child row (`team.raw_team`, `player.raw_player`, `matchup.raw_matchup`,
+  `scoring_settings.raw_scoring_settings`) so a single entity can be
+  reprocessed without deserializing the whole ~4.7MB fixture. This is some
+  intentional duplication of bytes on disk; accepted as fine at the current
+  single-league, single-season-in-dev scale. Revisit (e.g. store only the
+  full payload and reprocess child rows from it on demand) if/when this
+  covers many leagues and many seasons and the duplication becomes a real
+  storage or write-latency cost.
+- **`matchup` stores every raw schedule entry verbatim, including the
+  `home/away.rosterForMatchupPeriod.entries` block Phase 1 already flagged
+  as a misleading ESPN preview artifact** (docs/decisions.md Phase 1) that
+  can look like a populated roster even pre-draft. Storing it is still
+  correct -- persistence's job is to keep the source data for future
+  reprocessing, not to pre-filter it -- but only `matchup_period_id`,
+  `home_team_id`, `away_team_id` and `winner` are extracted into normalized
+  columns, and the `roster` table (built from `teams[].roster.entries`, the
+  actually-authoritative source) is the only place roster data is read from
+  normalized columns. The migration's own comment repeats this caveat so a
+  future reader of the schema doesn't have to go find the Phase 1 note to
+  learn it.
+- **`roster` stores every roster entry, bench and IR slots included**, not
+  just starters -- filtering to a starting lineup is
+  `ingest.parse.build_team_params`'s job when constructing `sim.engine`
+  inputs, and persistence shouldn't bake that downstream decision into what
+  gets kept. Against `fixtures/league_raw_2026.json` specifically this table
+  ends up empty (0 rows) after ingest, which is the correct, honest result
+  for a genuinely pre-draft league (`draftDetail.drafted` is `False`, every
+  team's `roster.entries` is empty -- see Phase 1) -- not a bug in the sync
+  logic. Verified explicitly in
+  `test_ingest_league_persists_normalized_data`.
+- **Test database setup: `fantavo_test`, a second Homebrew Postgres database
+  separate from `fantavo_dev`.** `ingest/tests/test_db.py`'s `conn` fixture
+  truncates every data table before each test (it owns `fantavo_test`
+  outright) rather than relying on transaction rollback -- `ingest_league`
+  commits internally between the "first ingest" and "second ingest" steps
+  the idempotency test needs to observe as two genuinely separate,
+  independently-visible states, which a single wrapping transaction that
+  gets rolled back at the end would not allow inspecting the same way while
+  still keeping each test isolated from the others.
+- **DB tests skip (not fail) when Postgres is unreachable**, via
+  `pytest.skip` with the exact setup commands in the message. This machine
+  now has Postgres running and all 5 `ingest/tests/test_db.py` tests
+  (including the byte-identical idempotency assertion) pass for real against
+  it -- skip-on-unreachable is a courtesy for a future environment that
+  hasn't run the Phase 3 setup steps, not a way to avoid actually running
+  the test here.
+- `DATABASE_URL` was added to `.env.example` as an optional, empty entry.
+  Unlike `LEAGUE_ID`/`ESPN_S2`/`SWID` it is not a secret (a local
+  Unix-socket connection string with no password), so `ingest/db.py`
+  defaults to `postgresql:///fantavo_dev` / `postgresql:///fantavo_test` in
+  code rather than requiring `.env` to be populated at all; the env var
+  exists only so a future non-default DSN (e.g. Phase 4's API service) has
+  somewhere conventional to override it from.
+- `mypy --strict ingest` and `ruff check ingest db` both still show exactly
+  the same pre-existing findings Phase 1/2 already documented and left
+  alone (20 `sim/engine.py` `ndarray`/`Any` gaps pulled in transitively via
+  `sim.engine` imports; 3 `TRY004` findings in `ingest/parse.py` and
+  `ingest/scoring.py`) -- zero new findings from `ingest/db.py`,
+  `ingest/tests/test_db.py`, or the `db/migrations/` SQL. Full suite:
+  `pytest -q` is 79 passed (74 from Phases 0-2 plus 5 new in
+  `ingest/tests/test_db.py`).
