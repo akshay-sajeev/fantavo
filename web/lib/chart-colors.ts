@@ -1,25 +1,27 @@
 /**
  * Categorical palette for per-team chart series (power rankings bars,
  * finish-distribution strips). design-system/MASTER.md specifies role
- * colors (primary blue, secondary blue, accent amber, destructive red) but
- * not a full categorical sweep for an arbitrary N-team league, so this
- * extends those hues into a larger, distinct-per-team sequence -- documented
- * in docs/decisions.md Phase 5b. Comfortably covers this app's league sizes
- * (10-12 teams per CLAUDE.md's chart-recommendation note).
+ * colors (primary blue, brand accent green, destructive red) but not a full
+ * categorical sweep for an arbitrary N-team league, so this extends those
+ * hues into a larger, distinct-per-team sequence, chosen to read clearly on
+ * the Dark Glass Makeover's obsidian background -- documented in
+ * docs/decisions.md Phase 14 (originally Phase 5b for the light-theme
+ * version of this file). Comfortably covers this app's league sizes (10-12
+ * teams per CLAUDE.md's chart-recommendation note).
  */
 export const TEAM_CHART_COLORS: readonly string[] = [
-  "#1E40AF", // primary blue
-  "#D97706", // brand accent amber
-  "#3B82F6", // data blue
-  "#0EA5A4", // teal
-  "#7C3AED", // violet
-  "#DC2626", // destructive red
-  "#059669", // green
-  "#DB2777", // pink
-  "#CA8A04", // gold
-  "#4F46E5", // indigo
-  "#0891B2", // cyan
-  "#EA580C", // orange
+  "#3B82F6", // primary glow blue
+  "#39FF14", // brand accent neon green
+  "#A78BFA", // violet
+  "#2DD4BF", // teal
+  "#F472B6", // pink
+  "#F87171", // destructive red
+  "#FACC15", // gold
+  "#60A5FA", // light blue
+  "#C084FC", // light violet
+  "#34D399", // green
+  "#38BDF8", // cyan
+  "#FB923C", // orange
 ];
 
 export function teamColor(index: number): string {
