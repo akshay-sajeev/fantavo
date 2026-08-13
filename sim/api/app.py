@@ -15,6 +15,8 @@ in route handlers" rules both apply directly here.
                                            current/safest/highest-upside lineups
     GET  /league/{league_id}/waiver-intelligence/{team_id}
                                            ranked free-agent priority list, per team
+    GET  /league/{league_id}/power-ranking-roast
+                                           good-natured, fact-grounded roast per team
 
 Both routes accept the ingest schema's real grain: an optional `season_id`
 (query param on GET, body field on POST). If omitted, the most recently
@@ -81,6 +83,12 @@ from sim.api.playoff_planner_view import (
     SlotPlayoffStrength,
     TeamPlayoffPlan,
     compute_playoff_planner,
+)
+from sim.api.roast_view import (
+    PowerRankingRoastResult,
+    RoastFact,
+    TeamRoast,
+    compute_power_ranking_roast,
 )
 from sim.api.roster_view import RosterPlayer, TeamRosterView, load_team_rosters
 from sim.api.schedule_view import ScheduledMatchup, load_schedule
@@ -532,6 +540,39 @@ class BeatMyLeagueResponse(BaseModel):
     trade_cautions: list[TradeCautionOut]
 
 
+class RoastFactOut(BaseModel):
+    """One concrete fact backing one sentence of a roast -- see
+    `sim.api.roast_view.RoastFact`. `kind` lets the UI badge/group facts;
+    `text` is the short, real citation (a rank, a player name, a percentage)
+    the joke next to it is grounded in."""
+
+    kind: str
+    text: str
+
+
+class TeamRoastOut(BaseModel):
+    team_id: int
+    team_name: str
+    title_probability: float
+    title_rank: int
+    league_team_count: int
+    roast: str
+    facts: list[RoastFactOut]
+
+
+class PowerRankingRoastResponse(BaseModel):
+    league_id: int
+    season_id: int
+    seed: int
+    n_sims: int
+    # False for a league with no completed draft to grade (e.g. the
+    # SYNTHETIC validation league) -- every roast is still real, just
+    # without a draft-derived sentence. See sim.api.roast_view's docstring.
+    has_draft_data: bool
+    # Ordered by title_probability descending -- the power-ranking order.
+    teams: list[TeamRoastOut]
+
+
 def _to_roster_player_out(player: RosterPlayer) -> RosterPlayerOut:
     return RosterPlayerOut(
         player_id=player.player_id,
@@ -855,6 +896,33 @@ def _to_beat_my_league_response(result: BeatMyLeagueResult) -> BeatMyLeagueRespo
         biggest_threat=_to_rival_threat_out(result.biggest_threat),
         real_advantage=_to_team_advantage_out(result.real_advantage),
         trade_cautions=[_to_trade_caution_out(c) for c in result.trade_cautions],
+    )
+
+
+def _to_roast_fact_out(fact: RoastFact) -> RoastFactOut:
+    return RoastFactOut(kind=fact.kind, text=fact.text)
+
+
+def _to_team_roast_out(team: TeamRoast) -> TeamRoastOut:
+    return TeamRoastOut(
+        team_id=team.team_id,
+        team_name=team.team_name,
+        title_probability=team.title_probability,
+        title_rank=team.title_rank,
+        league_team_count=team.league_team_count,
+        roast=team.roast,
+        facts=[_to_roast_fact_out(f) for f in team.facts],
+    )
+
+
+def _to_power_ranking_roast_response(result: PowerRankingRoastResult) -> PowerRankingRoastResponse:
+    return PowerRankingRoastResponse(
+        league_id=result.league_id,
+        season_id=result.season_id,
+        seed=result.seed,
+        n_sims=result.n_sims,
+        has_draft_data=result.has_draft_data,
+        teams=[_to_team_roast_out(t) for t in result.teams],
     )
 
 
@@ -1195,3 +1263,31 @@ def get_beat_my_league(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return _to_beat_my_league_response(result)
+
+
+@app.get(
+    "/league/{league_id}/power-ranking-roast",
+    response_model=PowerRankingRoastResponse,
+)
+def get_power_ranking_roast(
+    league_id: int,
+    season_id: int | None = None,
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> PowerRankingRoastResponse:
+    """A good-natured, per-team roast grounded entirely in real, already-
+    computed facts (simulated title-odds rank, a real draft reach/steal,
+    real zero-bench-depth weaknesses, a real rival threat) -- see
+    `sim.api.roast_view`'s module docstring for exactly how each fact is
+    selected and why this needs only one `simulate_seasons()` call for the
+    whole league, not one per team. Unlike `/draft-autopsy`, a league with no
+    completed draft does NOT 409 here -- `has_draft_data` is false instead
+    and every roast still renders with its other real material."""
+    try:
+        resolved_season_id = resolve_season_id(conn, league_id, season_id)
+        result = compute_power_ranking_roast(conn, league_id, resolved_season_id)
+    except LeagueNotIngestedError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except _DATA_UNAVAILABLE_ERRORS as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return _to_power_ranking_roast_response(result)

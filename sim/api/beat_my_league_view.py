@@ -78,6 +78,20 @@ Reuse, not a new computation (CLAUDE.md: "one simulation engine"):
    local data shape (player names per position, needed here to name real
    surplus players) is not.
 
+6. `_build_shared_materials` / `_compute_team_result` (added in Phase 12, for
+   `sim.api.roast_view`): the per-request pipeline above (one
+   `_compute_playoff_planner_from_raw` call, one profile-building pass) is
+   split from the per-TEAM threat/advantage/trade-caution selection so a
+   caller that needs this analysis for EVERY team in one request (the Power
+   Ranking Roast) can build the shared materials exactly ONCE and then call
+   `_compute_team_result` once per team_id -- never re-running
+   `simulate_seasons()` or the per-slot Monte Carlo sampling per team the way
+   calling `compute_beat_my_league()` in a loop would. `compute_beat_my_league`
+   itself is unchanged in behavior (same two calls, same order), just
+   expressed as `_build_shared_materials` then `_compute_team_result` for one
+   team_id -- see `sim/tests/test_api_beat_my_league.py` for the equivalence
+   check that this refactor didn't change any output.
+
 --------------------------------------------------------------------------
 Biggest threat -- what "real, specific reason" means here, precisely:
 
@@ -142,10 +156,16 @@ from typing import Any
 
 import psycopg
 
+from ingest.models import RawTeam
 from ingest.parse import parse_player_pool, parse_scoring_table, parse_teams
 from ingest.slots import DEFAULT_POSITION_NAMES, NON_STARTING_SLOTS, SLOT_NAMES
 from sim.api.params_loader import load_raw_payload
-from sim.api.playoff_planner_view import DEFAULT_N_SIMS, SlotPlayoffStrength, TeamPlayoffPlan
+from sim.api.playoff_planner_view import (
+    DEFAULT_N_SIMS,
+    PlayoffPlannerResult,
+    SlotPlayoffStrength,
+    TeamPlayoffPlan,
+)
 from sim.api.playoff_planner_view import (
     _compute_from_raw as _compute_playoff_planner_from_raw,  # reused wholesale, see module docstring
 )
@@ -403,41 +423,34 @@ def _synthesize_trade_caution_reasoning(
     )
 
 
-def compute_beat_my_league(
-    conn: psycopg.Connection[Any],
-    league_id: int,
-    season_id: int,
-    team_id: int,
-    *,
-    n_sims: int = DEFAULT_N_SIMS,
-) -> BeatMyLeagueResult:
-    """Build Beat My League for one selected team. Raises
-    `LeagueNotIngestedError` (via `load_raw_payload`) if the league/season
-    was never ingested, `UnknownTeamError` if `team_id` is not real for this
-    league/season, and the same `ingest.errors.RosterNotAvailableError` /
-    `MissingProjectionError` `sim.api.playoff_planner_view` already raises
-    for a league with no drafted, fully-projectable roster."""
-    raw = load_raw_payload(conn, league_id, season_id)
-    return _compute_from_raw(raw, league_id, season_id, team_id, n_sims=n_sims)
+@dataclass(frozen=True)
+class _SharedMaterials:
+    """Everything this module computes exactly ONCE per request, before any
+    per-team selection happens -- see module docstring point 6. Building this
+    once and passing it to `_compute_team_result` per team_id is what lets a
+    multi-team caller (`sim.api.roast_view`) get every team's threat/
+    advantage/trade-caution analysis without re-running `simulate_seasons()`
+    or the per-slot Monte Carlo sampling once per team."""
+
+    teams: tuple[RawTeam, ...]
+    planner: PlayoffPlannerResult
+    profiles: tuple[TeamLeagueProfile, ...]
+    profile_by_id: dict[int, TeamLeagueProfile]
+    slot_starters_by_team: dict[int, dict[str, list[str]]]
+    bench_names_by_team: dict[int, dict[str, list[str]]]
+    bench_counts_by_team: dict[int, Counter[str]]
 
 
-def _compute_from_raw(
-    raw: Mapping[str, Any], league_id: int, season_id: int, team_id: int, *, n_sims: int
-) -> BeatMyLeagueResult:
-    """The actual computation, factored out so it can be exercised directly
-    against an in-memory fixture dict (no Postgres needed) -- same
-    fast-unit-tests-plus-thin-integration-test split every other
-    `sim.api` view module already established."""
+def _build_shared_materials(
+    raw: Mapping[str, Any], league_id: int, season_id: int, *, n_sims: int
+) -> _SharedMaterials:
+    """The one real simulate_seasons() call plus per-slot sampling, and the
+    per-team profile-building pass over it, that every team's threat/
+    advantage/trade-caution computation reads from -- reused wholesale from
+    Playoff Planner, see module docstring point 4. Same raw payload, so no
+    second Postgres round trip, and this runs exactly once regardless of how
+    many teams the caller goes on to evaluate with `_compute_team_result`."""
     teams = parse_teams(raw)
-    team_ids = {t.team_id for t in teams}
-    if team_id not in team_ids:
-        raise UnknownTeamError(
-            f"team_id={team_id} is not a team in league_id={league_id} season_id={season_id}"
-        )
-
-    # The one real simulate_seasons() call plus per-slot sampling this
-    # module needs -- reused wholesale from Playoff Planner, see module
-    # docstring point 4. Same raw payload, so no second Postgres round trip.
     planner = _compute_playoff_planner_from_raw(raw, league_id, season_id, n_sims=n_sims)
 
     scoring_table = parse_scoring_table(raw)
@@ -480,6 +493,32 @@ def _compute_from_raw(
             )
         )
     profile_by_id = {p.team_id: p for p in profiles}
+
+    return _SharedMaterials(
+        teams=teams,
+        planner=planner,
+        profiles=tuple(profiles),
+        profile_by_id=profile_by_id,
+        slot_starters_by_team=slot_starters_by_team,
+        bench_names_by_team=bench_names_by_team,
+        bench_counts_by_team=bench_counts_by_team,
+    )
+
+
+def _compute_team_result(
+    team_id: int, materials: _SharedMaterials
+) -> tuple[RivalThreat, TeamAdvantage, tuple[TradeCaution, ...]]:
+    """Biggest threat / real advantage / trade cautions for ONE team, read
+    entirely from an already-built `_SharedMaterials` -- no simulation, no
+    Postgres, pure selection/comparison over numbers `_build_shared_materials`
+    already computed. See module docstring for the exact selection rules."""
+    profiles = materials.profiles
+    profile_by_id = materials.profile_by_id
+    teams = materials.teams
+    slot_starters_by_team = materials.slot_starters_by_team
+    bench_names_by_team = materials.bench_names_by_team
+    bench_counts_by_team = materials.bench_counts_by_team
+
     user_profile = profile_by_id[team_id]
 
     # --- Biggest threat -----------------------------------------------------
@@ -595,15 +634,57 @@ def _compute_from_raw(
             )
         )
 
+    return biggest_threat, real_advantage, tuple(cautions)
+
+
+def compute_beat_my_league(
+    conn: psycopg.Connection[Any],
+    league_id: int,
+    season_id: int,
+    team_id: int,
+    *,
+    n_sims: int = DEFAULT_N_SIMS,
+) -> BeatMyLeagueResult:
+    """Build Beat My League for one selected team. Raises
+    `LeagueNotIngestedError` (via `load_raw_payload`) if the league/season
+    was never ingested, `UnknownTeamError` if `team_id` is not real for this
+    league/season, and the same `ingest.errors.RosterNotAvailableError` /
+    `MissingProjectionError` `sim.api.playoff_planner_view` already raises
+    for a league with no drafted, fully-projectable roster."""
+    raw = load_raw_payload(conn, league_id, season_id)
+    return _compute_from_raw(raw, league_id, season_id, team_id, n_sims=n_sims)
+
+
+def _compute_from_raw(
+    raw: Mapping[str, Any], league_id: int, season_id: int, team_id: int, *, n_sims: int
+) -> BeatMyLeagueResult:
+    """The actual computation, factored out so it can be exercised directly
+    against an in-memory fixture dict (no Postgres needed) -- same
+    fast-unit-tests-plus-thin-integration-test split every other
+    `sim.api` view module already established. Thin wrapper over
+    `_build_shared_materials` + `_compute_team_result` for exactly one
+    team_id (see module docstring point 6) -- identical behavior to before
+    that split, just expressed as two reusable pieces."""
+    teams = parse_teams(raw)
+    team_ids = {t.team_id for t in teams}
+    if team_id not in team_ids:
+        raise UnknownTeamError(
+            f"team_id={team_id} is not a team in league_id={league_id} season_id={season_id}"
+        )
+
+    materials = _build_shared_materials(raw, league_id, season_id, n_sims=n_sims)
+    user_profile = materials.profile_by_id[team_id]
+    biggest_threat, real_advantage, trade_cautions = _compute_team_result(team_id, materials)
+
     return BeatMyLeagueResult(
         league_id=league_id,
         season_id=season_id,
         team_id=team_id,
         team_name=user_profile.team_name,
-        seed=planner.seed,
-        n_sims=planner.n_sims,
-        teams=tuple(profiles),
+        seed=materials.planner.seed,
+        n_sims=materials.planner.n_sims,
+        teams=materials.profiles,
         biggest_threat=biggest_threat,
         real_advantage=real_advantage,
-        trade_cautions=tuple(cautions),
+        trade_cautions=trade_cautions,
     )

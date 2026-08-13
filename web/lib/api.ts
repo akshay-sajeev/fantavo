@@ -4,6 +4,7 @@ import type {
   DraftAutopsyResponse,
   LineupOptimizerResponse,
   PlayoffPlannerResponse,
+  PowerRankingRoastResponse,
   RosterResponse,
   ScheduleResponse,
   SeasonReplayResponse,
@@ -211,6 +212,22 @@ export function getBeatMyLeague(
   seasonId?: number,
 ): Promise<BeatMyLeagueResponse> {
   return getJson<BeatMyLeagueResponse>(`/league/${leagueId}/beat-my-league/${teamId}`, {
+    season_id: seasonId,
+  });
+}
+
+/** GET /league/{id}/power-ranking-roast -- see sim.api.roast_view for the
+ * full methodology: every roast sentence is grounded in an already-real,
+ * already-computed fact (simulated title-odds rank, a real draft reach or
+ * steal, a real bench-depth weakness, a real rival threat), never an
+ * invented joke. `has_draft_data` is false for a league with no completed
+ * draft to grade -- every roast still renders, just without a draft-derived
+ * sentence. */
+export function getPowerRankingRoast(
+  leagueId: number,
+  seasonId?: number,
+): Promise<PowerRankingRoastResponse> {
+  return getJson<PowerRankingRoastResponse>(`/league/${leagueId}/power-ranking-roast`, {
     season_id: seasonId,
   });
 }

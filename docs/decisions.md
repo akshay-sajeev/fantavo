@@ -1796,3 +1796,185 @@ replay (see PLAN.md's "Deferred by choice" section) -- correctly sequenced
 after this league has actually completed at least one full season of its
 own real history to look back on. No code was written; nothing needs
 undoing when that day comes.
+
+## Phase 12 — Entertainment (power ranking roast only)
+
+*Covers the "power ranking roast" half of PLAN.md's Phase 12 (feature 16) only.
+Weekly awards is a separate sub-feature and was NOT built this phase -- see
+the dedicated note at the end of this section.*
+
+- **Reused `sim.api.beat_my_league_view` wholesale rather than recomputing
+  anything -- required a small, behavior-preserving refactor of that module
+  first, verified before writing a line of roast code.** `beat_my_league_view._compute_from_raw`
+  ran the entire `simulate_seasons()` + per-slot-sampling pipeline once per
+  selected team_id; calling it 8 times (once per team) to build a roast for
+  every team would have re-run that whole stochastic pipeline 8x for one
+  request, exactly the kind of redundant/approximated re-simulation CLAUDE.md's
+  "one simulation engine" rule warns against. Split `_compute_from_raw` into
+  `_build_shared_materials` (the one-time simulate_seasons() + profile-building
+  pass) and `_compute_team_result` (pure per-team selection over already-built
+  materials) -- `compute_beat_my_league` itself is now a two-line composition
+  of those pieces with byte-identical behavior, confirmed by re-running all 12
+  pre-existing `test_api_beat_my_league.py` tests immediately after the
+  refactor (all passed, no test edited) before adding anything new.
+- **`sim/api/roast_view.py` calls `_build_shared_materials` exactly once per
+  request, then `_compute_team_result` once per team_id** -- one real
+  simulation for the whole league's roast, not one per team. This is the
+  entire reason the refactor above was worth doing rather than just calling
+  `compute_beat_my_league()` in a loop.
+- **Exactly which real, already-computed facts each roast pulls from, and
+  how:** (1) simulated title-probability rank -- `TeamLeagueProfile.title_probability`,
+  the same number Playoff Planner / Beat My League already show, just ranked
+  and formatted for comedic framing; (2) a real draft reach --
+  `sim.api.draft_autopsy_view`'s own `worst_pick` (the specific named
+  alternative player passed over, and the real rank gap), used when that gap
+  clears an editorial `_REACH_THRESHOLD` (-3.0 rank-spots, same magnitude as
+  Draft Autopsy's own `_GAP_CAUSE_THRESHOLD`); (3) failing that, a real draft
+  steal -- that team's own `best_pick`, used when it clears `_STEAL_THRESHOLD`
+  (+5.0, deliberately a higher bar than a reach needs, so the backhanded
+  compliment only fires for a genuinely notable pick); (4) failing both, Draft
+  Autopsy's own already-synthesized `structural_finding` sentence, verbatim
+  (never a template -- that sentence is guaranteed real and team-specific by
+  Phase 7's own logic); (5) a real zero-bench-depth weakness --
+  `beat_my_league_view`'s already-vetted-for-team-differentiation
+  `TeamLeagueProfile.weaknesses[0]` (Playoff Planner's single `weakest_slot`,
+  not the raw `is_playoff_specific_weakness` flag Phase 8/10 already found is
+  NOT team-differentiating in this league -- K clears it for all 8 real
+  teams); (6) a real rival threat -- `beat_my_league_view`'s own biggest-threat
+  selection (a rival with a real structural strength at exactly this team's
+  own weakness, ranked by title probability), only cited when
+  `overlapping_slots` is non-empty (the real, honest "no rival specifically
+  attacks you" case is silently omitted, never forced). No new scoring
+  formula anywhere in this module -- every number is a straight read of
+  output another phase already computed and already shipped.
+- **Draft material is optional; everything else is not.** `DraftNotAvailableError`
+  from `draft_autopsy_view._compute_from_raw` is caught locally and turned
+  into `has_draft_data=False` on the response, rather than propagating to a
+  409 for the whole roast the way it does for `GET /draft-autopsy` directly.
+  Verified live against both leagues: the real league (`885686492`, a
+  completed real draft) gets `has_draft_data=True` and a real draft-reach or
+  draft-steal or structural-finding sentence in every one of its 8 roasts; the
+  SYNTHETIC validation league (`-1990001`, a mock draft with no real pick
+  sequence) gets `has_draft_data=False` and every roast still renders with
+  real title-rank/bench-depth/rival-threat material -- confirmed in the
+  browser, the UI's `DraftDataNote` banner only appears for the SYNTHETIC
+  league.
+- **`RoastFact` (kind + text) travels alongside every roast as its "receipts"
+  -- a machine-readable citation for every sentence, not just prose.** This
+  is what makes "every roast must trace to a real fact already computed
+  elsewhere" independently checkable rather than an unverifiable claim about
+  the prose: `sim/tests/test_api_roast.py` asserts each fact's `kind`
+  matches real underlying data (e.g. a `draft_reach` fact's `text` must name
+  the actual `worst_pick.player_name`/`alternative_player_name`, and that
+  same alternative name must also appear in the rendered `roast` string) --
+  13 new tests, all passing, none touching `sim/tests/test_engine.py`.
+- **Power-ranking order is `title_probability` descending with `team_id` as a
+  deterministic tiebreak** -- `title_rank` (1-indexed) is stamped directly
+  onto each `TeamRoast` server-side, so the frontend never re-sorts or
+  re-derives rank from raw probabilities (CLAUDE.md's "no analytics logic in
+  components," applied to something as small as a sort).
+- **No per-team selector on the page, unlike Lineup Optimizer / Waiver
+  Intelligence / Beat My League.** This feature is inherently whole-league --
+  everyone in the league gets roasted in the same response -- so there is
+  nothing for a `?team=` picker to select between; the page renders all 8 (or
+  10, for the SYNTHETIC league) cards in a responsive grid.
+- **Shareable image export: implemented for real, client-side, via
+  `html-to-image` (`toPng`/`toBlob`), not a stub.** Investigated the
+  realistic options first: a server-side headless-browser screenshot service
+  (Playwright/Puppeteer) would need a new backend process this app has no
+  infrastructure for and would violate "UI only, no analytics logic" scope
+  creep into `/web` needing a render server; a pure-CSS "looks screenshot-able"
+  card with no actual export button would not satisfy PLAN.md's explicit
+  "Shareable image export" requirement. `html-to-image` clones the target DOM
+  node, serializes it to an SVG `data:` URI, loads that as an `Image`, and
+  draws it to a `<canvas>` -- entirely in the browser, no server round trip,
+  no new backend. Each `RoastCard` wraps only its visual card (not its export
+  buttons) in a `ref`ed div so the buttons themselves are never captured;
+  "Download image" builds a PNG data URL and triggers a native browser
+  download via a synthetic `<a download>` click, "Copy image" (shown only
+  when `navigator.clipboard.write`/`ClipboardItem` are feature-detected
+  present) writes a PNG blob straight to the OS clipboard for pasting directly
+  into a group chat.
+  - **Real bug found and fixed during verification: a hydration mismatch.**
+    The `canCopyImage` feature-detection (`"clipboard" in navigator`) was
+    originally computed directly during render. Since `navigator` doesn't
+    exist during server-side rendering of this "use client" component, the
+    server-rendered HTML always omitted the "Copy image" button while the
+    client's first client-render included it -- a real hydration error,
+    caught via the browser console during verification (`Hydration failed
+    because the server rendered HTML didn't match the client`), not
+    hypothetical. Fixed with the standard pattern: `canCopyImage` starts as
+    `useState(false)` (matching what the server renders) and flips to the
+    real feature-detected value inside a `useEffect` after mount. Verified
+    clean (zero console errors) on a fresh tab/fresh `.next` build afterward.
+  - **Real robustness gap found and fixed during verification:
+    `navigator.clipboard.write()` can hang indefinitely rather than resolving
+    or rejecting.** Observed directly, twice, in this session's browser
+    tooling (both a synthetic DOM `.click()` and a simulated real mouse
+    click on "Copy image" left the button disabled with no feedback well
+    past any reasonable wait, with zero console error, while the underlying
+    `toBlob()` capture itself demonstrably succeeded -- confirmed via a
+    `data:image/svg+xml` network response returned `200 OK` in the same
+    click). Whether this specific hang is unique to a sandboxed/automated
+    browser context or can also happen for a real user (e.g. a
+    permission-prompt UI a user never resolves), a promise that can hang
+    forever behind a `disabled` button is a real UX bug either way. Fixed
+    with a generic `withTimeout()` wrapper (8s) applied to both the
+    `toPng`/`toBlob` capture call and the `clipboard.write` call in
+    `components/roast/roast-card.tsx`, so the button always recovers to an
+    honest "Couldn't export -- try again" state instead of staying stuck.
+    This was not a hypothetical hardening pass -- it was written in direct
+    response to a reproduced hang.
+- **Fact citations ("The receipts") are rendered as a labeled list, never
+  truncated with a hover-only tooltip** -- a direct application of the
+  ui-ux-pro-max skill's own compact-label guidance ("preserve labels... don't
+  clip with a hover-only tooltip; expose full text to keyboard, pointer and
+  touch users"), queried explicitly for this page. The citation text is the
+  evidence that makes the joke honest, so truncating it would undermine the
+  entire point of showing it.
+- **Rank iconography: `Trophy` (amber/brand-accent) for the #1 team, `Flame`
+  (destructive-red) for the last-place team, nothing for everyone else** --
+  both from `lucide-react` (already a dependency), matching MASTER.md's "SVG
+  icons, not emoji" rule; queried the ui-ux-pro-max skill's icon domain first
+  and found no curated match for a "roast/flame" icon, so this is a plain,
+  documented `lucide-react` choice, not a database-backed recommendation.
+- **New dependency: `html-to-image` (`^1.11.13`)**, added via `npm install`
+  in `/web` -- the only new package this phase needed.
+- **Verification**: backend -- `pytest -q` 211 passed (198 from Phases 0-10
+  plus 13 new in `sim/tests/test_api_roast.py`); `mypy --strict sim ingest`
+  21 pre-existing errors (0 new); `ruff check sim ingest db scripts` shows
+  only the same pre-existing findings in files this phase didn't touch (0 new
+  in `sim/api/roast_view.py`, `sim/api/beat_my_league_view.py`,
+  `sim/api/app.py`, or the new test file). Web: `tsc --noEmit`, `eslint .`,
+  and `npm run build` (production) all clean. Visually verified in a real
+  browser (uvicorn + Next.js dev server, both against the real league,
+  `league_id=885686492`) at 375px mobile and 1440px desktop, across multiple
+  teams: rank badges, trophy/flame icons, roast paragraphs, and "the
+  receipts" fact lists all render correct real data; confirmed at least two
+  teams' roasts are genuinely different (different draft picks, different
+  weak slots, different rival threats named) via both screenshots and
+  `get_page_text`; confirmed `document.documentElement.scrollWidth ===
+  window.innerWidth` at both widths (no horizontal scroll); confirmed the
+  SYNTHETIC league (`league_id=-1990001`) renders the `DraftDataNote` banner
+  and 10 real, draft-free roasts. Hit the same screenshot/scroll tooling
+  artifact flagged in Phases 8/9a/9b/10 (one `computer screenshot` call after
+  a page interaction returned a garbled/duplicated render) -- cross-checked
+  immediately with a fresh tab plus `get_page_text` and the accessibility
+  tree, both of which showed correct, complete real content, and zero console
+  errors at any point -- confirmed a tooling artifact, not an app bug, the
+  same conclusion reached under the same symptom in four prior phases.
+
+### Weekly awards: deferred, not built
+
+Team of the week, worst start/sit, luckiest/unluckiest, biggest riser/faller --
+none of this was built this phase. Every one of these is defined in terms of a
+*played week* (comparing actual scores, actual start/sit decisions, actual
+week-over-week movement), and the real league (`league_id=885686492`) has zero
+games played anywhere (`matchup.winner` is `UNDECIDED` for every regular-season
+matchup) -- the identical structural blocker Phase 9c ("Weekly recap: deferred,
+not built," above) already worked through for the same reason. PLAN.md's own
+words for this whole feature -- "the joke lands because the underlying stat is
+true" -- do not hold here yet, since there is no played-week stat to be true
+about. Deferred alongside Weekly Recap, correctly sequenced after this league
+has actually played at least one real week. No code was written for this
+sub-feature; nothing needs undoing when that day comes.

@@ -463,3 +463,42 @@ export interface BeatMyLeagueResponse {
   real_advantage: TeamAdvantage;
   trade_cautions: TradeCaution[];
 }
+
+/** Mirrors sim.api.app.RoastFactOut / sim.api.roast_view.RoastFact. One
+ * concrete, already-computed fact backing one sentence of a roast -- `kind`
+ * is a stable tag ("title_rank" | "draft_reach" | "draft_best_pick" |
+ * "draft_structural" | "bench_depth" | "rival_threat"), `text` is the real
+ * citation (a rank, a player name, a percentage) the joke is grounded in. */
+export interface RoastFact {
+  kind: string;
+  text: string;
+}
+
+/** Mirrors sim.api.app.TeamRoastOut. `title_rank` is this team's 1-indexed
+ * position in the power rankings (1 = best) -- `teams` on the enclosing
+ * response is already sorted by this. Every sentence in `roast` corresponds
+ * 1:1 to an entry in `facts`, in the same order -- see
+ * sim.api.roast_view's module docstring. */
+export interface TeamRoast {
+  team_id: number;
+  team_name: string;
+  title_probability: number;
+  title_rank: number;
+  league_team_count: number;
+  roast: string;
+  facts: RoastFact[];
+}
+
+/** Mirrors sim.api.app.PowerRankingRoastResponse. `has_draft_data` is false
+ * for a league with no completed draft to grade (e.g. the SYNTHETIC
+ * validation league) -- every roast still renders, just without a
+ * draft-derived sentence/fact. `teams` is already ordered by
+ * title_probability descending (the power-ranking order). */
+export interface PowerRankingRoastResponse {
+  league_id: number;
+  season_id: number;
+  seed: number;
+  n_sims: number;
+  has_draft_data: boolean;
+  teams: TeamRoast[];
+}
