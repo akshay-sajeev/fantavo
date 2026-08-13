@@ -1,14 +1,18 @@
+"use client";
+
 import { AlertTriangle, Info } from "lucide-react";
+import { motion, useReducedMotion } from "framer-motion";
 import {
   Table,
-  TableBody,
   TableCell,
   TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { AnimatedMeter, revealContainerVariants, revealItemVariants } from "@/components/ui/motion";
 import { formatPercent, formatWins } from "@/lib/format";
 import { tallyActualRecords, totalGamesPlayed } from "@/lib/standings";
+import { cn } from "@/lib/utils";
 import type { ScheduleResponse, SimulationResponse } from "@/lib/types";
 
 /**
@@ -33,6 +37,7 @@ export function StandingsTable({
   simulation: SimulationResponse;
   schedule: ScheduleResponse;
 }) {
+  const reduceMotion = useReducedMotion();
   const bySimStrength = [...simulation.teams].sort((a, b) => b.mean_wins - a.mean_wins);
   const actualRecords = tallyActualRecords(schedule);
   const gamesPlayed = totalGamesPlayed(actualRecords);
@@ -75,14 +80,28 @@ export function StandingsTable({
               {gamesPlayed > 0 && <TableHead className="text-right">Note</TableHead>}
             </TableRow>
           </TableHeader>
-          <TableBody>
+          <motion.tbody
+            data-slot="table-body"
+            className="[&_tr:last-child]:border-0"
+            variants={reduceMotion ? undefined : revealContainerVariants}
+            initial={reduceMotion ? undefined : "hidden"}
+            animate={reduceMotion ? undefined : "show"}
+          >
             {bySimStrength.map((team, projectedRank) => {
               const record = actualRecords.get(team.team_id);
               const diverges =
                 gamesPlayed > 0 &&
                 Math.abs((actualRank.get(team.team_id) ?? projectedRank) - projectedRank) >= 3;
+              const isTop = projectedRank === 0;
               return (
-                <TableRow key={team.team_id}>
+                <motion.tr
+                  key={team.team_id}
+                  variants={reduceMotion ? undefined : revealItemVariants}
+                  className={cn(
+                    "border-b border-border/70 transition-all duration-150 hover:bg-primary/5 hover:shadow-[inset_2px_0_0_0_var(--color-primary)] data-[state=selected]:bg-muted",
+                    isTop && "bg-brand-accent/5 shadow-[inset_2px_0_0_0_var(--color-brand-accent)]"
+                  )}
+                >
                   <TableCell className="tabular-nums text-muted-foreground">
                     {projectedRank + 1}
                   </TableCell>
@@ -92,11 +111,24 @@ export function StandingsTable({
                       ? `${record.wins}-${record.losses}${record.ties ? `-${record.ties}` : ""}`
                       : `${formatWins(team.mean_wins)} proj. wins`}
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {formatPercent(team.playoff_probability)}
+                  <TableCell className="text-right">
+                    <div className="flex flex-col items-end gap-1">
+                      <span className="tabular-nums">{formatPercent(team.playoff_probability)}</span>
+                      <AnimatedMeter
+                        value={team.playoff_probability}
+                        label={`${team.team_name} playoff probability`}
+                      />
+                    </div>
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {formatPercent(team.title_probability)}
+                  <TableCell className="text-right">
+                    <div className="flex flex-col items-end gap-1">
+                      <span className="tabular-nums">{formatPercent(team.title_probability)}</span>
+                      <AnimatedMeter
+                        value={team.title_probability}
+                        label={`${team.team_name} title probability`}
+                        glow="accent"
+                      />
+                    </div>
                   </TableCell>
                   {gamesPlayed > 0 && (
                     <TableCell className="text-right">
@@ -108,10 +140,10 @@ export function StandingsTable({
                       ) : null}
                     </TableCell>
                   )}
-                </TableRow>
+                </motion.tr>
               );
             })}
-          </TableBody>
+          </motion.tbody>
         </Table>
       </div>
     </div>
