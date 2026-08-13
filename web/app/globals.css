@@ -40,11 +40,13 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
-  /* MASTER.md's "Accent/CTA" amber, kept as its own token rather than
-     overloading shadcn's structural --accent (which drives every generic
-     hover/selected state across shadcn components). Used explicitly and
-     sparingly: CTA-style highlights only, e.g. the current-week badge and
-     the top power-ranking row. See docs/decisions.md Phase 5b. */
+  /* MASTER.md's "Accent/CTA" color -- amber in the original Phase 5a/5b
+     light palette, changed to neon green in the Dark Glass Makeover (see
+     docs/decisions.md Phase 5b and Phase 14). Kept as its own token rather
+     than overloading shadcn's structural --accent (which drives every
+     generic hover/selected state across shadcn components). Used explicitly
+     and sparingly: CTA-style highlights only, e.g. the current-week badge
+     and the top power-ranking row. */
   --color-brand-accent: var(--brand-accent);
   --color-brand-accent-foreground: var(--brand-accent-foreground);
   --color-data-blue: var(--data-blue);
@@ -55,59 +57,75 @@
   --radius-2xl: calc(var(--radius) * 1.8);
 }
 
-/* Fantavo palette, from design-system/MASTER.md (Phase 5a, reviewed and
-   approved) -- light theme only. MASTER.md's dials targeted a dense,
-   always-on-while-checking-scores dashboard, not a themeable marketing
-   site, and specified no dark palette, so no dark-mode toggle is wired up
-   in 5b (see docs/decisions.md). */
+/* Fantavo palette -- Dark Glass Makeover (2026-08-13), superseding the
+   original Phase 5a/5b light palette. See
+   docs/superpowers/specs/2026-08-13-dark-glass-makeover-design.md for the
+   approved design and docs/decisions.md's Phase 14 entry for why. Dark-only:
+   no light/dark toggle, matching the project owner's explicit direction to
+   replace rather than add a theme switch. Every text/background pairing
+   below was checked against WCAG 4.5:1 for normal text before being chosen
+   (see the spec's contrast notes); don't swap in a different hex without
+   re-checking. */
 :root {
-  --background: #f8fafc;
-  --foreground: #1e3a8a;
-  --card: #ffffff;
-  --card-foreground: #1e3a8a;
-  --popover: #ffffff;
-  --popover-foreground: #1e3a8a;
-  --primary: #1e40af;
-  --primary-foreground: #ffffff;
-  /* Structural shadcn "secondary" (generic filled button / muted surface) --
-     kept as a light neutral, not MASTER's saturated data-blue (#3B82F6,
-     --data-blue below), so ordinary secondary buttons don't compete
-     visually with real chart data. */
-  --secondary: #e9eef6;
-  --secondary-foreground: #1e3a8a;
-  --muted: #e9eef6;
-  --muted-foreground: #475569;
+  --background: #090d16;
+  --foreground: #e7ecf6;
+  --card: #0f1524;
+  --card-foreground: #e7ecf6;
+  --popover: #0f1524;
+  --popover-foreground: #e7ecf6;
+  --primary: #2563eb;
+  --primary-foreground: #f8fafc;
+  /* Structural shadcn "secondary" (generic filled surface / muted
+     background) -- a step lighter than --background but distinct from
+     --card's glass tone, so ordinary secondary buttons/surfaces don't
+     compete visually with real chart data or the primary glow-blue CTA. */
+  --secondary: #141b2e;
+  --secondary-foreground: #e7ecf6;
+  --muted: #141b2e;
+  --muted-foreground: #8b93a7;
   /* Structural shadcn "accent" (hover/selected tint across menus, tabs,
-     table rows) -- a light tint, not the brand accent amber. See
-     --brand-accent above for the real MASTER "Accent/CTA" color. */
-  --accent: #eff4fc;
-  --accent-foreground: #1e3a8a;
-  --brand-accent: #d97706;
-  /* White-on-#D97706 measures ~3.2:1 (MASTER's own note: adjusted only for
-     a 3:1 large-graphic-object threshold) -- below the 4.5:1 minimum this
-     design system's own checklist requires for text. Dark text measures
-     >6:1, so brand-accent-colored badges/buttons use dark text. */
-  --brand-accent-foreground: #1f2937;
+     table rows) -- a low-key dark tint, not the brand accent green. See
+     --brand-accent below for the real "Accent/CTA" color, reserved for
+     rare, high-signal use. */
+  --accent: #16203a;
+  --accent-foreground: #e7ecf6;
+  --brand-accent: #39ff14;
+  /* #39FF14 measures ~15.5:1 against dark ink and ~1.4:1 against white, so
+     brand-accent-colored badges/buttons must always use dark text, never
+     white -- same asymmetric-contrast situation MASTER.md's original amber
+     was in, just flipped (there, white text failed; here, white text fails
+     even harder and dark text is the only option). */
+  --brand-accent-foreground: #0b1220;
   --data-blue: #3b82f6;
-  --destructive: #dc2626;
-  --destructive-foreground: #ffffff;
-  --border: #dbeafe;
-  --input: #dbeafe;
-  --ring: #1e40af;
-  --chart-1: #1e40af;
-  --chart-2: #3b82f6;
-  --chart-3: #d97706;
-  --chart-4: #0ea5a4;
-  --chart-5: #7c3aed;
+  --destructive: #f87171;
+  --destructive-foreground: #0b1220;
+  --border: #1e293b;
+  --input: #1e293b;
+  --ring: #60a5fa;
+  --chart-1: #3b82f6;
+  --chart-2: #a78bfa;
+  --chart-3: #39ff14;
+  --chart-4: #2dd4bf;
+  --chart-5: #f472b6;
   --radius: 0.5rem;
-  --sidebar: #ffffff;
-  --sidebar-foreground: #1e3a8a;
-  --sidebar-primary: #1e40af;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #eff4fc;
-  --sidebar-accent-foreground: #1e3a8a;
-  --sidebar-border: #dbeafe;
-  --sidebar-ring: #1e40af;
+  --sidebar: #0f1524;
+  --sidebar-foreground: #e7ecf6;
+  --sidebar-primary: #2563eb;
+  --sidebar-primary-foreground: #f8fafc;
+  --sidebar-accent: #16203a;
+  --sidebar-accent-foreground: #e7ecf6;
+  --sidebar-border: #1e293b;
+  --sidebar-ring: #60a5fa;
+
+  /* Glow shadows -- soft colored box-shadows for hover/active/featured
+     states, referenced via Tailwind arbitrary values (e.g.
+     shadow-[var(--shadow-glow-primary)]). Plain CSS variables, not part of
+     the @theme inline color mapping below, since these are shadow values
+     rather than colors. */
+  --shadow-glow-primary: 0 0 16px 0 rgba(59, 130, 246, 0.35);
+  --shadow-glow-primary-lg: 0 0 28px 2px rgba(59, 130, 246, 0.5);
+  --shadow-glow-accent: 0 0 16px 0 rgba(57, 255, 20, 0.3);
+  --shadow-glow-accent-lg: 0 0 28px 2px rgba(57, 255, 20, 0.45);
 }
 
 @layer base {
