@@ -10,9 +10,11 @@ export default async function LeagueLayout({
   const { leagueId } = await params;
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-4 px-4 py-4">
+    <div className="flex w-full flex-1">
       <LeagueNav leagueId={Number(leagueId)} />
-      <div className="flex-1">{children}</div>
+      <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-4 py-4">
+        {children}
+      </div>
     </div>
   );
 }
