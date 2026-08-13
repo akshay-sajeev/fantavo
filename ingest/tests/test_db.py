@@ -113,20 +113,25 @@ def test_ingest_league_persists_normalized_data(
         cur.execute("SELECT COUNT(*) FROM league")
         assert cur.fetchone() == (1,)
 
+        # This fixture was refreshed after the league's real draft (see
+        # docs/decisions.md) -- it is now an 8-team, fully-drafted league,
+        # not the earlier 12-team pre-draft snapshot. Counts below reflect
+        # that real fixture, not hardcoded expectations.
         cur.execute("SELECT COUNT(*) FROM team")
-        assert cur.fetchone() == (len(summary.teams),) == (12,)
+        assert cur.fetchone() == (len(summary.teams),) == (8,)
 
         cur.execute("SELECT COUNT(*) FROM player")
-        assert cur.fetchone() == (len(summary.player_pool),) == (296,)
+        assert cur.fetchone() == (len(summary.player_pool),) == (399,)
 
         cur.execute("SELECT COUNT(*) FROM matchup")
-        assert cur.fetchone() == (84,)
+        assert cur.fetchone() == (len(raw["schedule"]),) == (56,)
 
-        # This fixture is genuinely pre-draft (see docs/decisions.md Phase
-        # 1) -- zero roster rows is the honest, correct result here, not a
-        # sign the sync logic silently dropped anything.
+        # The draft has happened -- every team's roster is now real and
+        # non-empty (128 total entries: starters, flex, bench, IR across
+        # all 8 teams), unlike the earlier pre-draft fixture where zero
+        # roster rows was the honest, correct result.
         cur.execute("SELECT COUNT(*) FROM roster")
-        assert cur.fetchone() == (0,)
+        assert cur.fetchone() == (128,)
 
         cur.execute(
             "SELECT points_per_reception FROM scoring_settings WHERE league_id = %s",
@@ -161,7 +166,12 @@ def test_ingesting_the_same_fixture_twice_is_byte_identical(
     # Non-trivial: prove both dumps actually contain real ingested data,
     # not two empty states that happen to compare equal.
     assert len(first_dump) > 100_000
-    assert b'"is_drafted": false' in first_dump
+    # This fixture is now post-draft (see docs/decisions.md) -- Bijan
+    # Robinson is a real rostered player here, not a free agent, but his
+    # name still surfaces in the dump either way (raw JSONB is stored for
+    # rostered players too, not just free agents -- see
+    # ingest.parse.every_player_with_stats).
+    assert b'"is_drafted": true' in first_dump
     assert b'"name": "Bijan Robinson"' in first_dump
 
 

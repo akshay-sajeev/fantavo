@@ -108,18 +108,23 @@ class RosterPlayerOut(BaseModel):
     """One rostered player plus their per-game risk metrics. `floor`/
     `ceiling` are the 10th/90th percentile of the same per-game
     Gamma(mean, sd) distribution the engine samples from -- see
-    `sim.api.roster_view` for the exact derivation."""
+    `sim.api.roster_view` for the exact derivation.
+
+    Numeric fields are null when `has_projection` is false: a bench/IR
+    player ESPN has no usable season projection for. Never null for a
+    starter -- see `sim.api.roster_view.load_team_rosters`."""
 
     player_id: int
     name: str
     position: str
     lineup_slot: str
     is_starter: bool
-    mean: float
-    sd: float
-    availability: float
-    floor: float
-    ceiling: float
+    has_projection: bool
+    mean: float | None
+    sd: float | None
+    availability: float | None
+    floor: float | None
+    ceiling: float | None
 
 
 class TeamRosterOut(BaseModel):
@@ -210,6 +215,7 @@ def _to_roster_player_out(player: RosterPlayer) -> RosterPlayerOut:
         position=player.position,
         lineup_slot=player.lineup_slot,
         is_starter=player.is_starter,
+        has_projection=player.has_projection,
         mean=player.mean,
         sd=player.sd,
         availability=player.availability,

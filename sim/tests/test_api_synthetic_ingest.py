@@ -71,13 +71,31 @@ def test_synthetic_payload_parses_through_the_real_ingest_pipeline(
     payload = build_synthetic_raw_payload(raw_fixture)
 
     scoring_table = parse_scoring_table(payload)
-    player_pool, skipped = parse_player_pool(payload, scoring_table)
-    # Same real _freeAgents block as the source fixture, so the same
-    # skip/keep split applies.
+    player_pool, _skipped = parse_player_pool(payload, scoring_table)
+
+    # `raw_fixture` is now a real drafted league (see docs/decisions.md,
+    # "no more mock data"), so its own player_pool includes real rostered
+    # players too -- payload's pool is no longer guaranteed to be the exact
+    # same size (it only carries the source fixture's free agents plus
+    # whichever real players the mock draft happened to pick, not every
+    # real player), but every player it does carry must still trace back to
+    # real fixture data -- never a superset, never an invented player.
     real_scoring_table = parse_scoring_table(raw_fixture)
-    real_pool, real_skipped = parse_player_pool(raw_fixture, real_scoring_table)
-    assert len(player_pool) == len(real_pool)
-    assert len(skipped) == len(real_skipped)
+    real_pool, _real_skipped = parse_player_pool(raw_fixture, real_scoring_table)
+    real_ids = {p.player_id for p in real_pool}
+    assert {p.player_id for p in player_pool} <= real_ids
+
+    # The actual regression this guards: every player drafted onto one of
+    # the 10 synthetic teams' rosters (starters and bench) must resolve to
+    # a real usable projection in payload's own pool -- this is exactly the
+    # gap that made build_team_params raise MissingProjectionError for
+    # every starter once ingest.parse.every_player_with_stats needed to
+    # read rosters, not just _freeAgents (see docs/decisions.md).
+    pool_ids = {p.player_id for p in player_pool}
+    rostered_ids = {
+        entry["playerId"] for team in payload["teams"] for entry in team["roster"]["entries"]
+    }
+    assert rostered_ids <= pool_ids
 
     teams = parse_teams(payload)
     assert len(teams) == N_MOCK_TEAMS

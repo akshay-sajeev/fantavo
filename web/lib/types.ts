@@ -32,11 +32,15 @@ export interface RosterPlayer {
   position: string;
   lineup_slot: string;
   is_starter: boolean;
-  mean: number;
-  sd: number;
-  availability: number;
-  floor: number;
-  ceiling: number;
+  /** false for a bench/IR player ESPN has no usable season projection for
+   * -- the numeric fields below are null in that case. Never false for a
+   * starter. */
+  has_projection: boolean;
+  mean: number | null;
+  sd: number | null;
+  availability: number | null;
+  floor: number | null;
+  ceiling: number | null;
 }
 
 export interface TeamRoster {

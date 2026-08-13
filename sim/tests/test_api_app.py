@@ -131,9 +131,15 @@ def test_whatif_runs_live_with_an_explicit_seed_and_returns_distributions(
     assert body["seed"] == 7
     assert body["n_sims"] == 50
     assert len(body["teams"]) == 10
+    # The synthetic league copies scheduleSettings from the real fixture
+    # (see scripts/ingest_synthetic_league.py), so its playoff team count
+    # tracks whatever the real league's currently is -- derived here rather
+    # than hardcoded so a future fixture refresh can't silently make this
+    # assertion stale again.
+    expected_finish_buckets = raw_fixture["settings"]["scheduleSettings"]["playoffTeamCount"] + 1
     for team in body["teams"]:
         assert 0.0 <= team["title_probability"] <= 1.0
-        assert len(team["finish_distribution"]) == 7  # n_playoff_teams(6) + 1
+        assert len(team["finish_distribution"]) == expected_finish_buckets
 
 
 def test_whatif_with_an_explicit_seed_is_reproducible(

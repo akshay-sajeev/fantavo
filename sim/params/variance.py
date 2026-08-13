@@ -1,13 +1,14 @@
 """Position-level scoring variance, fitted from real historical data.
 
 CLAUDE.md requires variance parameters to come from fitted historical data,
-never an invented constant. `fixtures/league_raw_2026.json` is a *pre-draft*
-snapshot -- ESPN's `_freeAgents` player list only exposes season-aggregate
-stat blocks per player (a single projected-season-total block and a single
-prior-actual-season-total block; see `ingest/parse.py::_find_season_projection`
-for the sibling projection lookup). There is no per-week (per
-`scoringPeriodId`) game log anywhere in this fixture, so a genuine per-player
-week-to-week variance cannot be fitted from it directly.
+never an invented constant. ESPN's player stat blocks (both `_freeAgents`
+and drafted-roster entries -- see `ingest.parse.every_player_with_stats`)
+only expose season-aggregate stat blocks per player (a single
+projected-season-total block and a single prior-actual-season-total block;
+see `ingest/parse.py::_find_season_projection` for the sibling projection
+lookup), regardless of whether the league has drafted. There is no per-week
+(per `scoringPeriodId`) game log anywhere in this fixture format, so a
+genuine per-player week-to-week variance cannot be fitted from it directly.
 
 What this module fits instead: a **position-level coefficient of variation**
 (CV = population sd / mean) from the real cross-sectional dispersion of every

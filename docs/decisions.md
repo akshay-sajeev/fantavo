@@ -901,3 +901,117 @@ One line per non-obvious choice and why. Appended at the end of each phase.
   check against the real running stack) rather than re-doing it, found no
   issues, and completed the commit/push/decisions-log steps this section
   itself documents.
+
+## No more mock data -- the real league has drafted
+
+The project owner ran `python scripts/fetch_fixture.py` after their actual
+draft and asked for the pre-draft/mock-data handling to be retired in favor
+of the real league. This surfaced two real, previously-latent bugs -- not
+edge cases invented for this update, but gaps that simply had no way to
+trigger before real drafted rosters existed anywhere in this codebase.
+
+- **`fixtures/league_raw_2026.json` is now genuinely post-draft**:
+  `draftDetail.drafted` is `true`, all 128 draft picks have a real
+  `playerId` (none are `-1`), and every one of the league's 8 teams (the
+  league itself shrank from the earlier 12-slot/10-joined snapshot to an
+  8-team, fully-joined league -- a real change on ESPN's side between
+  fetches, not a bug) has a full real roster. Re-scrubbed and re-verified
+  clean before committing: no secret key names, no un-pseudonymized
+  identity GUIDs (the only GUID-shaped strings are the same class of CDN
+  team-logo asset ids found clean in every prior fixture refresh), no
+  leaked emails, member names properly pseudonymized.
+- **Bug 1 -- `ingest.parse.parse_player_pool` only ever read
+  `raw['_freeAgents']`.** That was the entire relevant player universe
+  while the league was pre-draft, but ESPN removes a player from
+  `_freeAgents` the moment they're drafted -- so once real rosters existed,
+  every single starter on every team resolved to "no usable projection,"
+  and `ingest.parse.build_team_params` (correctly, per its own contract)
+  refused to fabricate a lineup and raised for every team. Fixed by adding
+  `ingest.parse.every_player_with_stats`, which unions `_freeAgents` with
+  every team's `roster.entries[].playerPoolEntry.player` (confirmed by
+  direct inspection to carry an identical dict shape to a free-agent
+  entry). `parse_player_pool` now sources from this union instead of
+  `_freeAgents` alone. The same free-agent-only bug existed independently
+  in `ingest.db.ingest_league`'s own raw-JSONB lookup (`raw_players_by_id`)
+  -- fixed by reusing the same helper rather than writing a second version
+  of the same union.
+- **`scripts/ingest_synthetic_league.py` needed a matching fix**: its mock
+  roster entries were bare `{"playerId", "lineupSlotId"}` dicts, since
+  `parse_player_pool` never used to look inside any roster at all. Once it
+  does, those entries needed a real `playerPoolEntry.player` block too (now
+  built from `every_player_with_stats`, reused rather than duplicated) so
+  the synthetic league stays genuinely ESPN-shaped and the fix above
+  doesn't silently break the one thing it was built to validate.
+- **Bug 2 -- `sim.api.roster_view.load_team_rosters` hard-failed an
+  entire league over one bench player.** Real rosters can include a
+  fringe bench player ESPN itself has no usable season projection for
+  (found live: **James Conner**, real bench player on a real team, whose
+  2026 season-total stat block has `appliedTotal == 0` -- the same "known
+  bad player" pattern Phase 1 already documented, just now encountered
+  rostered instead of as a free agent). The mock league never surfaced
+  this because its draft only ever picks from already-projectable
+  candidates. Resolved by distinguishing the two cases on purpose: an
+  unprojected **starter** still hard-raises `MissingProjectionError`
+  (exactly as load-bearing here as in `build_team_params` -- the
+  simulation genuinely cannot proceed without it), but an unprojected
+  **bench/IR** player is now rendered with a new `has_projection: bool`
+  field and null numeric fields (`mean`/`sd`/`availability`/`floor`/
+  `ceiling`) instead of blocking the whole team -- nothing in this module
+  or `sim.engine` computes team strength from bench players, so there is
+  nothing to fabricate a number for. Plumbed through
+  `RosterPlayerOut`/`RosterPlayer` (TypeScript) end to end. The what-if
+  `PlayerPicker` now disables selecting an unprojected player (with a "No
+  ESPN projection available" tooltip) rather than letting the user submit
+  a scenario the API would just 422 anyway; `TeamRiskCard` narrows
+  `team.starters` to a guaranteed-projected type at render time via a
+  small runtime-checked helper (`projectedStarter`), since starters are
+  contractually never unprojected but the shared `RosterPlayer` type can't
+  express that distinction statically. Two new backend regression tests
+  cover both branches directly against the real fixture's real James
+  Conner case, not a fabricated stand-in.
+- Several docstrings/comments across `ingest/db.py`, `sim/params/*.py`,
+  `sim/api/season_replay_view.py`, and `scripts/ingest_synthetic_league.py`
+  asserted "this league is pre-draft" as a present-tense fact about
+  `fixtures/league_raw_2026.json`. Reworded to past tense / historical
+  framing (or, where the real point was about missing weekly game logs or
+  missing actual scores rather than draft status specifically, reworded to
+  state that actual claim precisely) rather than left stale for a future
+  session to trust at face value.
+- Several test assertions were hardcoded against the old 12-team/10-joined/
+  296-player/6-playoff-team/84-matchup pre-draft snapshot; updated to the
+  new 8-team/399-player/4-playoff-team/56-matchup/128-roster-row reality
+  (`ingest/tests/test_parse.py`, `ingest/tests/test_db.py`). Two tests that
+  specifically needed a *pre-draft* or *no-roster* scenario to test the
+  right thing (`test_build_team_params_raises_when_no_roster_exists`,
+  `test_precompute_all_leagues_skips_a_league_with_no_drafted_roster`) were
+  converted to synthetic/derived payloads instead of relying on the real
+  fixture happening to be in that state, so they keep covering that branch
+  regardless of the real fixture's draft status going forward. A new
+  positive-path test (`test_precompute_all_leagues_caches_the_real_drafted_league`)
+  covers the case the old skip-test used to accidentally exercise.
+  `test_synthetic_payload_parses_through_the_real_ingest_pipeline`'s
+  `len(pool) == len(real_pool)` equality no longer holds now that "real
+  free agent" and "real rostered" are both valid pool sources -- replaced
+  with a subset check plus the actual regression that matters (every
+  synthetic-team roster player resolves to a real projection).
+- **Real league ingested and precomputed for real**: `ingest_league` run
+  against the post-draft fixture (league_id=885686492, "Freakatron Gang
+  2"), `sim.api.precompute` run to populate the real title-odds cache.
+  Sanity-checked against PLAN.md's rough band (written for a 10-team
+  league; this is 8 teams, so the even-odds baseline is 12.5% not 10%):
+  best team 22.3%, worst 2.5%, sensible spread, no red flag. Verified
+  visually in a real browser against the real running stack (API +
+  dashboard, power rankings, roster risk, all three what-if tabs) --
+  standings, rosters, matchups, and title odds are now the project owner's
+  actual league, not a fabricated stand-in.
+- `web/.env.local` (gitignored, local-only) `DEFAULT_LEAGUE_ID` switched
+  from the SYNTHETIC league to the real one. `web/.env.example` (the
+  committed setup template for a fresh clone with nothing ingested yet)
+  deliberately left pointing at the synthetic id -- it's still the only
+  league guaranteed to exist immediately after `scripts/ingest_synthetic_league.py`,
+  and every page already works for any ingested league id, real or
+  synthetic, with zero special-casing.
+- The SYNTHETIC validation league and `scripts/ingest_synthetic_league.py`
+  are kept, not removed -- still the fastest way to get a fully-drafted,
+  fully-projectable league for local dev/testing without needing a real
+  draft, and Phase 4/5b/6's tests still depend on it.

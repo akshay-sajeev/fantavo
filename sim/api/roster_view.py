@@ -41,7 +41,12 @@ import psycopg
 from scipy.stats import gamma as gamma_dist
 
 from ingest.errors import MissingProjectionError
-from ingest.parse import parse_player_pool, parse_scoring_table, parse_teams
+from ingest.parse import (
+    every_player_with_stats,
+    parse_player_pool,
+    parse_scoring_table,
+    parse_teams,
+)
 from ingest.slots import DEFAULT_POSITION_NAMES, NON_STARTING_SLOTS, SLOT_NAMES
 from sim.api.params_loader import load_raw_payload
 from sim.engine import _gamma_shape_scale
@@ -64,11 +69,18 @@ class RosterPlayer:
     position: str
     lineup_slot: str
     is_starter: bool
-    mean: float
-    sd: float
-    availability: float
-    floor: float
-    ceiling: float
+    # None for a bench/IR player ESPN has no usable projection for (real,
+    # not synthetic, rosters occasionally include one -- see
+    # docs/decisions.md "no more mock data"). Never None for a starter:
+    # load_team_rosters still hard-refuses to render a team with an
+    # unprojectable starter, since that starter is exactly as load-bearing
+    # for the simulation here as in ingest.parse.build_team_params.
+    has_projection: bool
+    mean: float | None
+    sd: float | None
+    availability: float | None
+    floor: float | None
+    ceiling: float | None
 
 
 @dataclass(frozen=True)
@@ -101,10 +113,26 @@ def _floor_ceiling(
 
 
 def _team_risk_rating(starters: tuple[RosterPlayer, ...]) -> float:
-    total_mean = sum(p.mean for p in starters)
+    # Starters are guaranteed projected by construction (load_team_rosters
+    # hard-refuses to build a team with an unprojectable starter) -- this
+    # loop turns that invariant into a type-narrowed float list rather than
+    # trusting it silently, so a future bug that violates it fails loudly
+    # here instead of producing a quietly-wrong risk number.
+    means: list[float] = []
+    availabilities: list[float] = []
+    for p in starters:
+        if p.mean is None or p.availability is None:
+            raise AssertionError(
+                f"starter {p.player_id} has no projection -- load_team_rosters must "
+                "never construct an unprojected starter"
+            )
+        means.append(p.mean)
+        availabilities.append(p.availability)
+
+    total_mean = sum(means)
     if total_mean <= 0:
         return 0.0
-    expected_available = sum(p.mean * p.availability for p in starters)
+    expected_available = sum(m * a for m, a in zip(means, availabilities, strict=True))
     return 1.0 - (expected_available / total_mean)
 
 
@@ -128,10 +156,21 @@ def load_team_rosters(
     """Every team's roster (starters + bench) for an ingested league/season,
     with per-player risk metrics attached. Raises `LeagueNotIngestedError`
     (via `load_raw_payload`) if the league/season was never ingested, and
-    `ingest.errors.MissingProjectionError` if a rostered player has no
+    `ingest.errors.MissingProjectionError` if a rostered *starter* has no
     usable projection -- the same refusal `ingest.parse.build_team_params`
-    already makes for the simulation path, applied here too rather than
-    silently hiding an at-risk player from the risk panel.
+    already makes for the simulation path, since a starter's projection is
+    exactly as load-bearing here.
+
+    A bench/IR player with no usable projection is not hard-failed the same
+    way: real rosters occasionally include a fringe player ESPN simply has
+    no clean season projection for (see docs/decisions.md, "no more mock
+    data" -- this never happened with the fabricated mock-league rosters,
+    since the mock draft only ever picked from already-projectable
+    candidates). Rendered instead with `has_projection=False` and null
+    numeric fields, so one such bench player does not block the entire
+    league's roster view -- nothing in this module or `sim.engine` computes
+    team strength from bench players, so there is nothing to fabricate a
+    number for.
     """
     raw = load_raw_payload(conn, league_id, season_id)
 
@@ -140,6 +179,7 @@ def load_team_rosters(
     projections_by_id = {p.player_id: p for p in player_pool}
     position_cv = fit_position_cv(raw)
     players_by_id = derive_player_params_pool(player_pool, position_cv)
+    raw_players_by_id = every_player_with_stats(raw)
 
     teams = parse_teams(raw)
     raw_teams_by_id = {t["id"]: t for t in raw["teams"]}
@@ -149,43 +189,82 @@ def load_team_rosters(
         raw_team = raw_teams_by_id[team.team_id]
         entries = raw_team.get("roster", {}).get("entries", [])
 
-        entry_player_ids: list[int] = []
-        entry_slot_ids: list[int] = []
-        for entry in entries:
-            player_id = entry["playerId"]
-            if player_id not in players_by_id or player_id not in projections_by_id:
-                raise MissingProjectionError(
-                    f"team {team.team_id} ({team.name}) roster includes player "
-                    f"{player_id} with no usable projection -- refusing to render "
-                    "it in the roster/risk view rather than hide it silently"
-                )
-            entry_player_ids.append(player_id)
-            entry_slot_ids.append(entry["lineupSlotId"])
-
-        means = np.array([players_by_id[pid].mean for pid in entry_player_ids], dtype=np.float64)
-        sds = np.array([players_by_id[pid].sd for pid in entry_player_ids], dtype=np.float64)
-        floors, ceilings = _floor_ceiling(means, sds) if entry_player_ids else (
+        # Vectorized floor/ceiling over only the entries with a usable
+        # projection -- same Gamma-distribution formula sim.engine uses.
+        # Looked up per player_id below rather than by list position, so
+        # the final starters/bench build-out can stay in the roster's
+        # original entry order even though unprojected entries are skipped
+        # here.
+        projected_ids = [
+            e["playerId"]
+            for e in entries
+            if e["playerId"] in players_by_id and e["playerId"] in projections_by_id
+        ]
+        means = np.array([players_by_id[pid].mean for pid in projected_ids], dtype=np.float64)
+        sds = np.array([players_by_id[pid].sd for pid in projected_ids], dtype=np.float64)
+        floors, ceilings = _floor_ceiling(means, sds) if projected_ids else (
             np.array([]),
             np.array([]),
         )
+        floor_by_id = dict(zip(projected_ids, floors, strict=True))
+        ceiling_by_id = dict(zip(projected_ids, ceilings, strict=True))
 
         starters: list[RosterPlayer] = []
         bench: list[RosterPlayer] = []
-        for i, (player_id, slot_id) in enumerate(zip(entry_player_ids, entry_slot_ids, strict=True)):
+        for entry in entries:
+            player_id = entry["playerId"]
+            slot_id = entry["lineupSlotId"]
+            is_starter = slot_id not in NON_STARTING_SLOTS
+            has_projection = player_id in players_by_id and player_id in projections_by_id
+
+            if not has_projection:
+                if is_starter:
+                    raise MissingProjectionError(
+                        f"team {team.team_id} ({team.name}) roster includes starter "
+                        f"{player_id} with no usable projection -- refusing to invent "
+                        "one for the simulation-relevant part of this roster"
+                    )
+                raw_player = raw_players_by_id.get(player_id)
+                name = raw_player["fullName"] if raw_player else f"Player {player_id}"
+                default_position_id: int | None = (
+                    raw_player.get("defaultPositionId") if raw_player else None
+                )
+                position = (
+                    DEFAULT_POSITION_NAMES.get(default_position_id, "?")
+                    if default_position_id is not None
+                    else "?"
+                )
+                bench.append(
+                    RosterPlayer(
+                        player_id=player_id,
+                        name=name,
+                        position=position,
+                        lineup_slot=SLOT_NAMES.get(slot_id, str(slot_id)),
+                        is_starter=False,
+                        has_projection=False,
+                        mean=None,
+                        sd=None,
+                        availability=None,
+                        floor=None,
+                        ceiling=None,
+                    )
+                )
+                continue
+
             projection = projections_by_id[player_id]
             params = players_by_id[player_id]
-            is_starter = slot_id not in NON_STARTING_SLOTS
             player = RosterPlayer(
                 player_id=player_id,
                 name=projection.name,
                 position=DEFAULT_POSITION_NAMES.get(projection.default_position_id, "?"),
                 lineup_slot=SLOT_NAMES.get(slot_id, str(slot_id)),
                 is_starter=is_starter,
+                has_projection=True,
                 mean=params.mean,
                 sd=params.sd,
                 availability=params.availability,
-                floor=float(floors[i]),
-                ceiling=float(ceilings[i]),
+                floor=float(floor_by_id[player_id]),
+                ceiling=float(ceiling_by_id[player_id]),
             )
             (starters if is_starter else bench).append(player)
 

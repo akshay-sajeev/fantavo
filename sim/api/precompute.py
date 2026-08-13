@@ -64,10 +64,11 @@ def precompute_all_leagues(
 
     Leagues with no drafted roster yet (`RosterNotAvailableError`, a subclass
     of `IngestError`) are skipped with a log line, not silently ignored and
-    not fabricated around -- e.g. `fixtures/league_raw_2026.json`'s real
-    league is genuinely pre-draft (see docs/decisions.md Phase 1) and will
-    be skipped here for exactly that reason until it is re-ingested
-    post-draft.
+    not fabricated around -- e.g. this was `fixtures/league_raw_2026.json`'s
+    real league for Phases 1-5 while it was still pre-draft (see
+    docs/decisions.md); it is real and drafted as of the "no more mock data"
+    update and precomputes normally now, but any other not-yet-drafted
+    league ingested in the future still hits this same skip path.
     """
     resolved_computed_at = computed_at or datetime.now(timezone.utc)
     with conn.cursor() as cur:

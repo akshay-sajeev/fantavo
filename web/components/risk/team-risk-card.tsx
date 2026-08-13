@@ -11,7 +11,29 @@ import {
 } from "@/components/ui/table";
 import { RangeBar } from "@/components/risk/range-bar";
 import { formatPercent } from "@/lib/format";
-import type { TeamRoster } from "@/lib/types";
+import type { RosterPlayer, TeamRoster } from "@/lib/types";
+
+/** Starters are guaranteed to carry a real projection by the API contract
+ * (sim/api/roster_view.py hard-refuses to build a team with an unprojected
+ * starter) -- this narrows the nullable RosterPlayer fields to plain
+ * numbers for exactly that population, failing loudly rather than silently
+ * rendering a zero'd bar if that contract is ever violated. */
+function projectedStarter(
+  player: RosterPlayer,
+): RosterPlayer & { mean: number; sd: number; availability: number; floor: number; ceiling: number } {
+  if (player.mean === null || player.floor === null || player.ceiling === null) {
+    throw new Error(
+      `starter ${player.player_id} (${player.name}) has no projection -- the API should never return this`,
+    );
+  }
+  return player as RosterPlayer & {
+    mean: number;
+    sd: number;
+    availability: number;
+    floor: number;
+    ceiling: number;
+  };
+}
 
 /** Presentation-only banding of the already-computed `risk_rating` number
  * into low/medium/high -- a display threshold, not a new statistic. */
@@ -30,7 +52,8 @@ function riskBand(riskRating: number): { label: string; className: string } {
 
 export function TeamRiskCard({ team }: { team: TeamRoster }) {
   const band = riskBand(team.risk_rating);
-  const scaleMax = Math.max(1, ...team.starters.map((p) => p.ceiling));
+  const starters = team.starters.map(projectedStarter);
+  const scaleMax = Math.max(1, ...starters.map((p) => p.ceiling));
 
   return (
     <Card>
@@ -61,7 +84,7 @@ export function TeamRiskCard({ team }: { team: TeamRoster }) {
           </div>
         )}
 
-        {team.starters.length === 0 ? (
+        {starters.length === 0 ? (
           <p className="text-sm text-muted-foreground">No roster ingested for this team yet.</p>
         ) : (
           <div className="overflow-x-auto">
@@ -76,7 +99,7 @@ export function TeamRiskCard({ team }: { team: TeamRoster }) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {team.starters.map((player) => (
+                {starters.map((player) => (
                   <TableRow key={player.player_id}>
                     <TableCell className="font-medium">{player.name}</TableCell>
                     <TableCell className="text-muted-foreground">{player.position}</TableCell>

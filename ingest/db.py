@@ -42,7 +42,7 @@ from typing import Any
 import psycopg
 
 from ingest.models import LeagueSummary, PlayerProjection, RawTeam
-from ingest.parse import parse_league_summary
+from ingest.parse import every_player_with_stats, parse_league_summary
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "db" / "migrations"
 
@@ -257,11 +257,11 @@ def _sync_rosters(
 ) -> None:
     """Every roster entry for every team, bench and IR included.
 
-    Stores whatever the fixture actually has -- for a pre-draft fixture like
-    fixtures/league_raw_2026.json that is zero rows for every team (see
-    docs/decisions.md Phase 1), which this function must not treat as an
-    error: an empty roster is the true state of a pre-draft league, not a
-    parsing failure.
+    Stores whatever the fixture actually has -- for a pre-draft fixture that
+    is zero rows for every team (fixtures/league_raw_2026.json was exactly
+    this through Phase 5, see docs/decisions.md, before the real league
+    drafted), which this function must not treat as an error: an empty
+    roster is the true state of a pre-draft league, not a parsing failure.
     """
     conn.execute(
         "DELETE FROM roster WHERE league_id = %s AND season_id = %s", (league_id, season_id)
@@ -360,7 +360,12 @@ def ingest_league(
     raw_teams_list = raw["teams"]
     raw_teams_by_id = {t["id"]: t for t in raw_teams_list}
     raw_scoring_settings = raw["settings"]["scoringSettings"]
-    raw_players_by_id = {fa["player"]["id"]: fa["player"] for fa in raw["_freeAgents"]}
+    # Free agents AND drafted-roster players -- see
+    # ingest.parse.every_player_with_stats. A free-agent-only lookup here
+    # (this function's pre-fix behavior) raised KeyError on the first
+    # drafted starter's raw JSONB blob once summary.player_pool started
+    # including rostered players too (see docs/decisions.md).
+    raw_players_by_id = every_player_with_stats(raw)
 
     with conn.transaction():
         _upsert_league(conn, summary, raw, ingested_at)

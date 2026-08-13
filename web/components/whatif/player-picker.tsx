@@ -27,17 +27,27 @@ export function PlayerPicker({
     <ul className="space-y-1">
       {players.map((player) => {
         const isSelected = selected.includes(player.player_id);
+        // A player with no usable ESPN projection can't be validly fed into
+        // a live simulation (the API rejects it with a clear 422 if tried
+        // anyway -- see sim/api/app.py's post_whatif) -- disabled here
+        // rather than left selectable into a submit-time error.
+        const disabled = !player.has_projection;
         return (
           <li key={player.player_id}>
             <button
               type="button"
               aria-pressed={isSelected}
+              disabled={disabled}
+              title={disabled ? "No ESPN projection available for this player" : undefined}
               onClick={() => onToggle(player.player_id)}
               className={
-                "flex w-full cursor-pointer items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 text-left text-sm transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring " +
-                (isSelected
-                  ? "border-primary bg-primary/10"
-                  : "border-border hover:bg-muted/60")
+                "flex w-full items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 text-left text-sm transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring " +
+                (disabled
+                  ? "cursor-not-allowed border-border bg-muted/30 opacity-60"
+                  : "cursor-pointer " +
+                    (isSelected
+                      ? "border-primary bg-primary/10"
+                      : "border-border hover:bg-muted/60"))
               }
             >
               <span className="flex min-w-0 items-center gap-2">
@@ -68,7 +78,9 @@ export function PlayerPicker({
                 </Badge>
               </span>
               <span className="shrink-0 tabular-nums text-muted-foreground">
-                {formatPoints(player.mean)} pts/gm
+                {player.has_projection && player.mean !== null
+                  ? `${formatPoints(player.mean)} pts/gm`
+                  : "No projection"}
               </span>
             </button>
           </li>

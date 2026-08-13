@@ -1,15 +1,18 @@
 """SYNTHETIC DATA -- for pipeline validation only, not real team predictions.
 
-`fixtures/league_raw_2026.json` is pre-draft: every team's `roster.entries`
-is empty and `draftDetail.drafted` is `False` (see docs/decisions.md, Phase 1
-and Phase 2 sections). There is therefore no real `sim.engine.TeamParams`
-this repo can build yet -- `ingest.parse.build_team_params` correctly raises
-`RosterNotAvailableError` for every one of this league's real teams, and this
-module does not work around that.
+This module exists because `fixtures/league_raw_2026.json` was genuinely
+pre-draft through Phase 5 (every team's `roster.entries` empty,
+`draftDetail.drafted` `False` -- see docs/decisions.md, Phase 1 and Phase 2
+sections): with no real roster, `ingest.parse.build_team_params` correctly
+raised `RosterNotAvailableError` for every one of this league's real teams,
+and this module does not work around that. The real league has since
+drafted, but this module is kept and still used for pipeline
+validation/testing (e.g. the API's synthetic league) independent of that --
+it never reads or depends on any real team's actual roster.
 
 What this module builds instead: a small mock league of fabricated team
 rosters, assembled by a simple simulated snake draft over the fixture's real
-296-player free-agent pool. Every individual player's `PlayerParams` (mean,
+free-agent pool. Every individual player's `PlayerParams` (mean,
 sd, availability) is real, derived by `sim.params.derive` exactly as it would
 be for an actual roster. What is fake is *which players end up on which
 team* -- these groupings do not correspond to any real manager, any actual

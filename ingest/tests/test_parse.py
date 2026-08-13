@@ -63,11 +63,30 @@ def test_parse_teams_flags_unclaimed_slots(raw: dict[str, Any]) -> None:
     teams = parse_teams(raw)
     claimed = [t for t in teams if t.has_owner]
     unclaimed = [t for t in teams if not t.has_owner]
-    # This fixture is a 12-slot league with 10 joined managers (see
-    # docs/decisions.md) -- both groups must be non-empty for this to be a
-    # meaningful assertion, not a vacuous one.
+    # This fixture is now an 8-slot league, fully joined and drafted (see
+    # docs/decisions.md) -- every team is claimed, so `unclaimed` is
+    # correctly empty here. The "has genuinely unclaimed slots" case that
+    # made this assertion meaningful pre-draft is covered on synthetic data
+    # below instead, since the real fixture no longer exercises it.
     assert len(claimed) == raw["status"]["teamsJoined"]
     assert len(unclaimed) == len(teams) - len(claimed)
+
+
+def test_parse_teams_flags_unclaimed_slots_on_synthetic_partial_league() -> None:
+    """Synthetic payload exercising an unclaimed-slot league, since the real
+    fixture is now fully joined and no longer covers this case (see the
+    test above)."""
+    synthetic_raw = {
+        "teams": [
+            {"id": 1, "name": "Claimed Team", "owners": ["member_aaaa"]},
+            {"id": 2, "name": "Unclaimed Team", "owners": []},
+        ]
+    }
+    teams = parse_teams(synthetic_raw)
+    claimed = [t for t in teams if t.has_owner]
+    unclaimed = [t for t in teams if not t.has_owner]
+    assert len(claimed) == 1
+    assert len(unclaimed) == 1
 
 
 # --------------------------------------------------------------------------
@@ -132,13 +151,26 @@ def test_parse_player_pool_skips_known_bad_players(raw: dict[str, Any]) -> None:
     skipped_names = {p.name for p in skipped}
     # Verified by direct inspection of the fixture (see docs/decisions.md):
     # two players have no season-projection stat block at all, two have one
-    # with appliedTotal == 0.
+    # with appliedTotal == 0. James Conner is now rostered rather than a
+    # free agent (the league has since drafted), but the pool now covers
+    # rostered players too (see docs/decisions.md), so he's still found and
+    # still correctly skipped for the same reason.
     assert {"Tyreek Hill", "Brandon Aiyuk"} <= skipped_names
     assert {"Ricky Pearsall", "James Conner"} <= skipped_names
 
     projected_names = {p.name for p in projections}
     assert projected_names.isdisjoint(skipped_names)
-    assert len(projections) + len(skipped) == len(raw["_freeAgents"])
+
+    # The pool is the union of free agents and every rostered player, not
+    # just _freeAgents (which no longer includes drafted players at all).
+    rostered_ids = {
+        entry["playerPoolEntry"]["player"]["id"]
+        for team in raw["teams"]
+        for entry in team.get("roster", {}).get("entries", [])
+    }
+    free_agent_ids = {e["player"]["id"] for e in raw["_freeAgents"]}
+    total_unique_players = len(free_agent_ids | rostered_ids)
+    assert len(projections) + len(skipped) == total_unique_players
 
 
 def test_parse_player_pool_means_are_positive(raw: dict[str, Any]) -> None:
@@ -159,9 +191,12 @@ def test_parse_player_pool_means_are_positive(raw: dict[str, Any]) -> None:
 def test_parse_league_summary(summary: LeagueSummary, raw: dict[str, Any]) -> None:
     assert summary.league_id == raw["id"]
     assert summary.season_id == 2026
-    assert summary.is_drafted is False
-    assert summary.size == 12
-    assert summary.n_playoff_teams == 6
+    # This fixture was refreshed after the league's real draft (see
+    # docs/decisions.md) -- it is now an 8-team, fully-joined, drafted
+    # league, not the earlier 12-team pre-draft snapshot.
+    assert summary.is_drafted is True
+    assert summary.size == 8
+    assert summary.n_playoff_teams == 4
     assert summary.schedule.n_teams == summary.size
     assert len(summary.teams) == summary.size
 
@@ -171,12 +206,19 @@ def test_parse_league_summary(summary: LeagueSummary, raw: dict[str, Any]) -> No
 # --------------------------------------------------------------------------
 
 
-def test_build_team_params_raises_when_no_roster_exists(raw: dict[str, Any]) -> None:
-    """This fixture is pre-draft (draftDetail.drafted is False, every
-    team's roster.entries is empty) -- build_team_params must refuse to
-    invent a lineup rather than pull one from the free-agent pool."""
+def test_build_team_params_raises_when_no_roster_exists() -> None:
+    """Synthetic pre-draft-shaped payload (draftDetail.drafted False, empty
+    roster.entries) -- build_team_params must refuse to invent a lineup
+    rather than pull one from the free-agent pool. The real fixture no
+    longer covers this case since the league has since drafted (see
+    docs/decisions.md), so this uses the same synthetic-payload pattern as
+    the other edge-case tests in this section."""
+    synthetic_raw = {
+        "draftDetail": {"drafted": False},
+        "teams": [{"id": 1, "name": "Test Team", "roster": {"entries": []}}],
+    }
     with pytest.raises(RosterNotAvailableError, match="no roster entries"):
-        build_team_params(raw, team_id=1, players_by_id={})
+        build_team_params(synthetic_raw, team_id=1, players_by_id={})
 
 
 def test_build_team_params_raises_for_unknown_team(raw: dict[str, Any]) -> None:

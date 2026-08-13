@@ -112,9 +112,11 @@ def main() -> None:
     print("=" * 78)
     print(f"Source fixture: {path}")
     print(
-        "This league's real teams have no drafted rosters yet (pre-draft "
-        "fixture) -- see docs/decisions.md. Every team below is a fabricated "
-        "mock roster assembled from this fixture's real player pool."
+        "This script always builds a FABRICATED mock league for pipeline "
+        "validation, regardless of whether the source fixture's real teams "
+        "have drafted rosters -- see docs/decisions.md. Every team below is "
+        "a mock roster assembled from this fixture's real player pool, not "
+        "this league's actual teams."
     )
 
     scoring_table = parse_scoring_table(raw)

@@ -147,28 +147,67 @@ def _find_season_projection(
     return None
 
 
+def every_player_with_stats(raw: Mapping[str, Any]) -> dict[int, Any]:
+    """Every player dict this fixture carries a `stats` block for -- the
+    union of the free-agent pool (`_freeAgents`) and every team's drafted
+    roster (`teams[].roster.entries[].playerPoolEntry.player`).
+
+    Before a league drafts, `_freeAgents` alone is the entire relevant
+    player universe (see docs/decisions.md Phase 1). Once it drafts, ESPN
+    removes rostered players from `_freeAgents` entirely -- relying on that
+    list alone silently loses every drafted player's projection, which is
+    exactly what made `build_team_params` raise `MissingProjectionError` for
+    every starter on a freshly-drafted league (see docs/decisions.md).
+    Both sources carry an identical `player` dict shape (same keys, same
+    `stats` structure) -- confirmed by direct inspection, not assumed -- so
+    the rest of this module's per-player scoring/projection logic is
+    unchanged; this only widens where player dicts are collected from.
+
+    A player_id should appear in exactly one of the two sources (free agent
+    XOR rostered) in a consistent fixture, so a plain last-write-wins merge
+    is safe; there is nothing to reconcile between the two copies of the
+    same player.
+    """
+    free_agents = raw.get("_freeAgents")
+    if not isinstance(free_agents, list):
+        raise ValueError("fixture has no '_freeAgents' list")
+
+    raw_teams = raw.get("teams")
+    if not isinstance(raw_teams, list):
+        raise ValueError("fixture has no 'teams' list")
+
+    by_id: dict[int, Any] = {}
+    for entry in free_agents:
+        player = entry["player"]
+        by_id[player["id"]] = player
+    for team in raw_teams:
+        for roster_entry in team.get("roster", {}).get("entries", []):
+            player = roster_entry["playerPoolEntry"]["player"]
+            by_id[player["id"]] = player
+
+    return by_id
+
+
 def parse_player_pool(
     raw: Mapping[str, Any], scoring_table: ScoringTable
 ) -> tuple[tuple[PlayerProjection, ...], tuple[SkippedPlayer, ...]]:
-    """Season-long projections for every player in the fixture's `_freeAgents`
-    pool, scored under this league's own scoringSettings.
+    """Season-long projections for every player the fixture has stats for --
+    free agents and drafted-roster players alike (see
+    `every_player_with_stats`) -- scored under this league's own
+    scoringSettings.
 
     Players with no usable projection are not silently dropped -- each is
     recorded as a SkippedPlayer with a specific reason, so a caller (or the
     demo) can say exactly who was excluded and why rather than presenting a
     quietly-incomplete pool.
     """
-    free_agents = raw.get("_freeAgents")
-    if not isinstance(free_agents, list):
-        raise ValueError("fixture has no '_freeAgents' list")
+    players_by_id = every_player_with_stats(raw)
 
     season_id = raw["seasonId"]
     projections: list[PlayerProjection] = []
     skipped: list[SkippedPlayer] = []
 
-    for entry in free_agents:
-        player = entry["player"]
-        player_id: int = player["id"]
+    for player_id, player in players_by_id.items():
         name: str = player["fullName"]
         default_position_id: int = player["defaultPositionId"]
 

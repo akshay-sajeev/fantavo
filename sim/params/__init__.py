@@ -11,8 +11,8 @@ docs/decisions.md's "STOP decision (sd / availability)". See:
                                 own projected games count.
 - sim/params/derive.py      -- combines both into PlayerParams.
 - sim/params/mock_rosters.py -- SYNTHETIC team groupings for pipeline
-                                validation only (this league is pre-draft
-                                and has no real rosters yet).
+                                validation only, independent of whether the
+                                source fixture's real league has drafted.
 - sim/params/validate.py    -- `python -m sim.params.validate`, a printed
                                 sanity check against the mock league.
 """

@@ -4,10 +4,11 @@
 Both features need per-week *actual* scores to replay or permute -- data
 this codebase does not have anywhere yet. `matchup` (db/migrations/
 0001_create_schema.sql) stores only a decidedness flag (`winner`) and a raw
-JSONB blob, no score columns, and neither the real league (still pre-draft)
-nor the SYNTHETIC validation league (a mock draft, no games "played") has
-any actual weekly scoring data. See docs/decisions.md Phase 6 for the full
-resolution this module implements:
+JSONB blob, no score columns, and neither the real league (drafted, but its
+season hasn't been played yet -- every matchup is still `UNDECIDED`) nor the
+SYNTHETIC validation league (a mock draft, no games "played") has any actual
+weekly scoring data. See docs/decisions.md Phase 6 for the full resolution
+this module implements:
 
     ONE sampled "actual" season is drawn from the exact same fitted
     Gamma(mean, sd) x availability model `sim.engine.simulate_seasons()`

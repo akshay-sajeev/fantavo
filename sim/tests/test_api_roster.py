@@ -9,15 +9,18 @@ bench depth as documented.
 
 from __future__ import annotations
 
+import copy
 import os
 from collections.abc import Iterator
+from datetime import datetime, timezone
 from typing import Any
 
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
-from ingest.db import DEFAULT_TEST_DSN
+from ingest.db import DEFAULT_TEST_DSN, ingest_league
+from ingest.errors import MissingProjectionError
 from sim.api import app as app_module
 from sim.api.roster_view import load_team_rosters
 
@@ -47,6 +50,14 @@ def test_load_team_rosters_floor_is_below_mean_and_ceiling_above(
     assert rosters
     for team in rosters:
         for player in team.starters:
+            # Starters are never unprojected (load_team_rosters hard-raises
+            # otherwise) -- asserted explicitly so a real violation of that
+            # contract fails loudly here rather than as a type error.
+            assert player.has_projection
+            assert player.floor is not None
+            assert player.mean is not None
+            assert player.ceiling is not None
+            assert player.availability is not None
             assert player.floor < player.mean < player.ceiling
             assert 0.0 < player.availability <= 1.0
 
@@ -109,3 +120,70 @@ def test_positional_concentration_flags_only_positions_with_zero_bench_depth(
         assert set(team.positional_concentration) == {
             f"No bench depth at {pos}" for pos in starter_positions if pos not in bench_positions
         }
+
+
+# --------------------------------------------------------------------------
+# Unprojected roster players -- real, drafted rosters occasionally include
+# one (see docs/decisions.md, "no more mock data"); the fabricated
+# SYNTHETIC league never does, since its mock draft only ever picks
+# already-projectable players. James Conner is a real, currently-existing
+# case in fixtures/league_raw_2026.json: rostered on the bench, but his
+# 2026 season-total stat block has appliedTotal == 0 (see docs/decisions.md
+# Phase 1's "known bad players").
+# --------------------------------------------------------------------------
+
+
+def test_load_team_rosters_renders_a_real_unprojected_bench_player_without_failing(
+    pg_conn: psycopg.Connection[Any], raw_fixture: dict[str, Any]
+) -> None:
+    ingest_league(pg_conn, raw_fixture, ingested_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    pg_conn.commit()
+
+    rosters = load_team_rosters(pg_conn, raw_fixture["id"], raw_fixture["seasonId"])
+
+    unprojected = [p for team in rosters for p in team.bench if not p.has_projection]
+    assert any(p.name == "James Conner" for p in unprojected)
+    conner = next(p for p in unprojected if p.name == "James Conner")
+    assert conner.is_starter is False
+    assert conner.mean is None
+    assert conner.sd is None
+    assert conner.availability is None
+    assert conner.floor is None
+    assert conner.ceiling is None
+    # A real position label, not "?" -- comes from the raw fixture directly
+    # (ingest.parse.every_player_with_stats), not from the projection pool
+    # that has no entry for him.
+    assert conner.position != "?"
+
+    # The rest of the league is unaffected: every other team still loads,
+    # and risk_rating/positional_concentration (starters-only formulas) are
+    # still real numbers, not skipped or zeroed out because of one
+    # unrelated team's unprojected bench player.
+    assert len(rosters) == len(raw_fixture["teams"])
+    for team in rosters:
+        assert team.starters  # every real team has a full starting lineup
+        assert isinstance(team.risk_rating, float)
+
+
+def test_load_team_rosters_raises_for_an_unprojected_starter(
+    pg_conn: psycopg.Connection[Any], raw_fixture: dict[str, Any]
+) -> None:
+    """Unlike a bench player, an unprojected *starter* still hard-fails --
+    it is exactly as load-bearing here as in ingest.parse.build_team_params.
+    Constructed by moving the real James Conner entry (see the test above)
+    from bench into a starting slot; nothing else about the fixture needs
+    to be fabricated since he already has no usable projection for real."""
+    raw = copy.deepcopy(raw_fixture)
+    moved = False
+    for team in raw["teams"]:
+        for entry in team["roster"]["entries"]:
+            if entry["playerId"] == 3045147:  # James Conner
+                entry["lineupSlotId"] = 2  # RB, a starting slot
+                moved = True
+    assert moved, "fixture no longer contains player 3045147 (James Conner) -- update this test"
+
+    ingest_league(pg_conn, raw, ingested_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    pg_conn.commit()
+
+    with pytest.raises(MissingProjectionError, match="no usable projection"):
+        load_team_rosters(pg_conn, raw["id"], raw["seasonId"])

@@ -7,6 +7,7 @@ version of the same check lives in sim/tests/test_api_app.py).
 
 from __future__ import annotations
 
+import copy
 from datetime import datetime, timezone
 from typing import Any
 
@@ -59,9 +60,42 @@ def test_precompute_league_matches_a_direct_engine_call_with_the_same_seed(
 def test_precompute_all_leagues_skips_a_league_with_no_drafted_roster(
     pg_conn: psycopg.Connection[Any], raw_fixture: dict[str, Any]
 ) -> None:
-    """fixtures/league_raw_2026.json's real league is genuinely pre-draft
-    (see docs/decisions.md Phase 1) -- precompute_all_leagues must skip it
-    (RosterNotAvailableError), not raise, and not cache anything for it."""
+    """precompute_all_leagues must skip a league with no drafted roster
+    (RosterNotAvailableError), not raise, and not cache anything for it.
+
+    fixtures/league_raw_2026.json's real league was this exact case through
+    Phase 5 (see docs/decisions.md), but it has since been drafted, so this
+    derives a pre-draft-shaped payload from it instead: same real
+    scoringSettings/_freeAgents/schedule (variance fitting needs a real,
+    large historical sample -- a from-scratch minimal fixture can't supply
+    that, see sim/params/variance.py's _MIN_SAMPLE_SIZE), but with
+    draftDetail.drafted forced False and every team's roster cleared, so
+    only the "not drafted yet" condition this test actually targets differs
+    from the real fixture.
+    """
+    pre_draft_raw = copy.deepcopy(raw_fixture)
+    pre_draft_raw["id"] = raw_fixture["id"] + 1  # distinct from the real league's id
+    pre_draft_raw["draftDetail"]["drafted"] = False
+    for team in pre_draft_raw["teams"]:
+        team["roster"]["entries"] = []
+
+    ingest_league(pg_conn, pre_draft_raw, ingested_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    pg_conn.commit()
+
+    precompute_all_leagues(pg_conn, computed_at=datetime(2026, 6, 1, tzinfo=timezone.utc))
+    pg_conn.commit()
+
+    cached = read_cached_simulation(pg_conn, pre_draft_raw["id"], pre_draft_raw["seasonId"])
+    assert cached is None
+
+
+def test_precompute_all_leagues_caches_the_real_drafted_league(
+    pg_conn: psycopg.Connection[Any], raw_fixture: dict[str, Any]
+) -> None:
+    """The real league (fixtures/league_raw_2026.json) has been drafted (see
+    docs/decisions.md, "no more mock data") -- precompute_all_leagues must
+    now cache a real simulation for it, the positive-path counterpart to the
+    skip test above."""
     ingest_league(pg_conn, raw_fixture, ingested_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     pg_conn.commit()
 
@@ -69,7 +103,9 @@ def test_precompute_all_leagues_skips_a_league_with_no_drafted_roster(
     pg_conn.commit()
 
     cached = read_cached_simulation(pg_conn, raw_fixture["id"], raw_fixture["seasonId"])
-    assert cached is None
+    assert cached is not None
+    assert cached.n_sims > 0
+    assert len(cached.result["teams"]) == len(raw_fixture["teams"]) == 8
 
 
 def test_precompute_all_leagues_caches_the_synthetic_league(

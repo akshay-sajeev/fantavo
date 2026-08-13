@@ -3,16 +3,20 @@ Phase 4 API verification only. NOT a real forecast for the user's actual
 league, and NOT a substitute for ingesting the real league once it is
 drafted.
 
-Why this exists: `fixtures/league_raw_2026.json` is genuinely pre-draft
-(`draftDetail.drafted` is `False`, every real team's `roster.entries` is
-empty -- see docs/decisions.md, Phase 1). `ingest.parse.build_team_params`
-correctly refuses to fabricate a lineup for any of this league's real teams.
-Phase 4's done criterion ("curl against a locally ingested league returns
-title odds identical to a direct engine call with the same seed") therefore
-needs *some* ingested league with real `TeamParams` to test against. Phase 2
-already hit this exact blocker and the project owner approved a synthetic
-mock league (`sim/params/mock_rosters.py`) as the resolution -- this script
-applies the same precedent to Phase 4, rather than re-litigating it.
+Why this exists: `fixtures/league_raw_2026.json` was genuinely pre-draft
+through Phase 5 (`draftDetail.drafted` was `False`, every real team's
+`roster.entries` was empty -- see docs/decisions.md, Phase 1). At that time,
+`ingest.parse.build_team_params` correctly refused to fabricate a lineup for
+any of this league's real teams. Phase 4's done criterion ("curl against a
+locally ingested league returns title odds identical to a direct engine call
+with the same seed") therefore needed *some* ingested league with real
+`TeamParams` to test against. Phase 2 already hit this exact blocker and the
+project owner approved a synthetic mock league (`sim/params/mock_rosters.py`)
+as the resolution -- this script applied the same precedent to Phase 4,
+rather than re-litigating it. The real league has since drafted (see
+docs/decisions.md's "no more mock data" update), but this script and the
+SYNTHETIC league it builds are kept for local API verification/testing
+regardless -- they never read or depend on any real team's actual roster.
 
 What it does: runs the identical snake draft `sim.params.mock_rosters`
 already uses (via the shared `draft_mock_rosters` function -- not a second
@@ -39,7 +43,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ingest.db import DEFAULT_DEV_DSN, connect, dsn_from_env, ingest_league, run_migrations
 from ingest.models import PlayerProjection
-from ingest.parse import FIXTURES_DIR, load_fixture, parse_player_pool, parse_scoring_table
+from ingest.parse import (
+    FIXTURES_DIR,
+    every_player_with_stats,
+    load_fixture,
+    parse_player_pool,
+    parse_scoring_table,
+)
 from ingest.slots import BENCH_SLOT_ID
 from sim.engine import round_robin_schedule
 from sim.params.mock_rosters import draft_mock_rosters
@@ -100,6 +110,15 @@ def build_synthetic_raw_payload(raw: dict[str, Any]) -> dict[str, Any]:
     scoring_table = parse_scoring_table(raw)
     player_pool, _skipped = parse_player_pool(raw, scoring_table)
 
+    # Raw ESPN player dicts for every player this fixture has stats for
+    # (free agents and, now that `raw` may itself be a post-draft fixture,
+    # real rostered players too) -- needed below to embed a genuine
+    # `playerPoolEntry.player` block on each synthetic roster entry, since
+    # `ingest.parse.every_player_with_stats` (which this script's own
+    # `player_pool` is built through) now reads rosters that way too. Reused
+    # rather than re-implemented, same discipline as `draft_mock_rosters`.
+    raw_players_by_id = every_player_with_stats(raw)
+
     rosters = draft_mock_rosters(raw, player_pool, n_mock_teams=N_MOCK_TEAMS)
 
     # Bench depth, read from this league's own real rosterSettings rather
@@ -122,7 +141,16 @@ def build_synthetic_raw_payload(raw: dict[str, Any]) -> dict[str, Any]:
             "owners": ["synthetic"],
             "roster": {
                 "entries": [
-                    {"playerId": player_id, "lineupSlotId": lineup_slot_id}
+                    {
+                        "playerId": player_id,
+                        "lineupSlotId": lineup_slot_id,
+                        # Real ESPN roster entries nest the player dict here
+                        # (see ingest.parse.every_player_with_stats); embed
+                        # the same real dict so this payload stays genuinely
+                        # ESPN-shaped instead of a shortcut only
+                        # build_team_params could parse.
+                        "playerPoolEntry": {"player": raw_players_by_id[player_id]},
+                    }
                     for player_id, lineup_slot_id in (*roster, *benches[team_index])
                 ]
             },
