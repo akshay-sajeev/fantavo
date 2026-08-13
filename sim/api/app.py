@@ -48,6 +48,15 @@ from pydantic import BaseModel, Field
 
 from ingest.db import DEFAULT_DEV_DSN, connect, dsn_from_env
 from ingest.errors import IngestError
+from sim.api.beat_my_league_view import (
+    BeatMyLeagueResult,
+    RivalThreat,
+    TeamAdvantage,
+    TeamLeagueProfile,
+    TradeCaution,
+    compute_beat_my_league,
+)
+from sim.api.beat_my_league_view import UnknownTeamError as BeatMyLeagueUnknownTeamError
 from sim.api.cache import read_cached_simulation, serialize_result
 from sim.api.draft_autopsy_view import (
     DraftAutopsy,
@@ -465,6 +474,64 @@ class WaiverIntelligenceResponse(BaseModel):
     groups: list[WaiverPositionGroupOut]
 
 
+class TeamLeagueProfileOut(BaseModel):
+    """One team's league-wide standing -- see
+    `sim.api.beat_my_league_view.TeamLeagueProfile` for exactly what
+    `strengths`/`weaknesses` are (a pure selection over Playoff Planner's own
+    already-computed `SlotPlayoffStrength` list, not a new formula) and what
+    `playoff_schedule_note` is (Playoff Planner's own recommendation,
+    surfaced verbatim)."""
+
+    team_id: int
+    team_name: str
+    title_probability: float
+    playoff_probability: float
+    finish_distribution: list[float]
+    strengths: list[SlotPlayoffStrengthOut]
+    weaknesses: list[SlotPlayoffStrengthOut]
+    playoff_schedule_note: str
+
+
+class RivalThreatOut(BaseModel):
+    """See `sim.api.beat_my_league_view`'s module docstring for exactly how
+    the biggest threat is selected and why `overlapping_slots` can be
+    empty (an honest fallback, not a bug)."""
+
+    team_id: int
+    team_name: str
+    title_probability: float
+    overlapping_slots: list[str]
+    reasoning: str
+
+
+class TeamAdvantageOut(BaseModel):
+    slots: list[str]
+    reasoning: str
+
+
+class TradeCautionOut(BaseModel):
+    position: str
+    team_bench_depth_at_position: int
+    bench_player_names: list[str]
+    rival_teams_with_need: list[str]
+    reasoning: str
+
+
+class BeatMyLeagueResponse(BaseModel):
+    league_id: int
+    season_id: int
+    team_id: int
+    team_name: str
+    seed: int
+    n_sims: int
+    teams: list[TeamLeagueProfileOut]
+    biggest_threat: RivalThreatOut
+    real_advantage: TeamAdvantageOut
+    # A real, honest empty list for a team with no positional trade leverage
+    # anywhere in the league right now -- see module docstring.
+    trade_cautions: list[TradeCautionOut]
+
+
 def _to_roster_player_out(player: RosterPlayer) -> RosterPlayerOut:
     return RosterPlayerOut(
         player_id=player.player_id,
@@ -736,6 +803,58 @@ def _to_waiver_intelligence_response(
         team_name=result.team_name,
         ownership_data_note=result.ownership_data_note,
         groups=[_to_waiver_position_group_out(g) for g in result.groups],
+    )
+
+
+def _to_team_league_profile_out(profile: TeamLeagueProfile) -> TeamLeagueProfileOut:
+    return TeamLeagueProfileOut(
+        team_id=profile.team_id,
+        team_name=profile.team_name,
+        title_probability=profile.title_probability,
+        playoff_probability=profile.playoff_probability,
+        finish_distribution=list(profile.finish_distribution),
+        strengths=[_to_slot_playoff_strength_out(s) for s in profile.strengths],
+        weaknesses=[_to_slot_playoff_strength_out(s) for s in profile.weaknesses],
+        playoff_schedule_note=profile.playoff_schedule_note,
+    )
+
+
+def _to_rival_threat_out(threat: RivalThreat) -> RivalThreatOut:
+    return RivalThreatOut(
+        team_id=threat.team_id,
+        team_name=threat.team_name,
+        title_probability=threat.title_probability,
+        overlapping_slots=list(threat.overlapping_slots),
+        reasoning=threat.reasoning,
+    )
+
+
+def _to_team_advantage_out(advantage: TeamAdvantage) -> TeamAdvantageOut:
+    return TeamAdvantageOut(slots=list(advantage.slots), reasoning=advantage.reasoning)
+
+
+def _to_trade_caution_out(caution: TradeCaution) -> TradeCautionOut:
+    return TradeCautionOut(
+        position=caution.position,
+        team_bench_depth_at_position=caution.team_bench_depth_at_position,
+        bench_player_names=list(caution.bench_player_names),
+        rival_teams_with_need=list(caution.rival_teams_with_need),
+        reasoning=caution.reasoning,
+    )
+
+
+def _to_beat_my_league_response(result: BeatMyLeagueResult) -> BeatMyLeagueResponse:
+    return BeatMyLeagueResponse(
+        league_id=result.league_id,
+        season_id=result.season_id,
+        team_id=result.team_id,
+        team_name=result.team_name,
+        seed=result.seed,
+        n_sims=result.n_sims,
+        teams=[_to_team_league_profile_out(t) for t in result.teams],
+        biggest_threat=_to_rival_threat_out(result.biggest_threat),
+        real_advantage=_to_team_advantage_out(result.real_advantage),
+        trade_cautions=[_to_trade_caution_out(c) for c in result.trade_cautions],
     )
 
 
@@ -1046,3 +1165,33 @@ def get_waiver_intelligence(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return _to_waiver_intelligence_response(result)
+
+
+@app.get(
+    "/league/{league_id}/beat-my-league/{team_id}",
+    response_model=BeatMyLeagueResponse,
+)
+def get_beat_my_league(
+    league_id: int,
+    team_id: int,
+    season_id: int | None = None,
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> BeatMyLeagueResponse:
+    """Every team's title odds / structural strengths & weaknesses / playoff
+    schedule difficulty, plus one selected team's biggest threat, real
+    advantage, and which positions not to trade away -- see
+    `sim.api.beat_my_league_view`'s module docstring for the full
+    methodology and exactly what is reused from Playoff Planner versus
+    computed fresh here. Raises 404 for an unknown team_id, exactly like the
+    Lineup Optimizer and Waiver Intelligence."""
+    try:
+        resolved_season_id = resolve_season_id(conn, league_id, season_id)
+        result = compute_beat_my_league(conn, league_id, resolved_season_id, team_id)
+    except LeagueNotIngestedError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BeatMyLeagueUnknownTeamError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except _DATA_UNAVAILABLE_ERRORS as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return _to_beat_my_league_response(result)

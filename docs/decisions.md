@@ -1602,3 +1602,162 @@ real games exist to recap. Revisit once `matchup.winner` is no longer
 `schedule_view.load_schedule` already track this and will surface it via
 `current_week` the moment it's true). No code was written for this sub-feature;
 nothing here needs undoing when that day comes.
+
+## Phase 10 — Beat My League
+
+- **Reused Playoff Planner's entire computation wholesale, rather than
+  re-simulating anything.** `sim/api/beat_my_league_view.py` reaches into
+  `sim.api.playoff_planner_view`'s private `_compute_from_raw` directly (not
+  its public, Postgres-taking `compute_playoff_planner`) so the ONE real
+  `simulate_seasons()` call plus per-slot Monte Carlo sampling this feature
+  needs runs exactly once per request, off the same raw payload this module
+  already loaded -- calling the public function instead would force a
+  second, redundant `load_raw_payload` round trip. This is a different class
+  of reuse than the "small shared rule, reimplemented locally per view
+  module" precedent Phase 8/9b established for bench-depth-by-position
+  counting (five lines, cheap to duplicate for a different local dataclass
+  shape): here the thing being reused is an entire stochastic simulation
+  pipeline, and CLAUDE.md's "one simulation engine" rule means that must be
+  called once and built on, never re-run. `beat_my_league_view.py`
+  constructs zero `np.random.Generator` instances of its own -- title
+  probability, playoff probability, and finish distribution for every team
+  come straight from `PlayoffSeedOdds` (itself an unmodified read of
+  `SimulationResult`); everything else in this module is deterministic
+  post-processing/comparison over already-computed numbers.
+- **"Structural strength" = a pure selection over Playoff Planner's own
+  already-computed `SlotPlayoffStrength` list, not a new formula.**
+  Strengths: every slot whose `league_percentile` clears an editorial
+  70.0 threshold (`_STRONG_PERCENTILE_THRESHOLD`), falling back to the
+  team's single best slot if none clears it -- automatically
+  team-differentiating since `league_percentile` is a relative, rank-based
+  number (only a minority of teams can clear "top 30%" at any slot).
+- **"Structural weakness" = Playoff Planner's own single `weakest_slot`,
+  NOT every slot flagged `is_playoff_specific_weakness` -- a real bug caught
+  before shipping, the same "verify team-differentiation before using a
+  signal" discipline Phase 8/9b already established for this exact
+  bench-depth-at-K/D-ST pattern.** An earlier draft of this module selected
+  every `is_playoff_specific_weakness` slot per team. Verified live against
+  the real league: K clears that flag for all 8 of 8 real teams (nobody in
+  this league carries a bench kicker) and D/ST for 6 of 8 -- reporting the
+  raw flagged set would have shown "K" as a "structural weakness" for
+  nearly every team, true but useless as team-specific advice, exactly the
+  "Generic fantasy advice is a failure condition" trap CLAUDE.md warns
+  about. Fixed by reusing `TeamPlayoffPlan.weakest_slot` verbatim (Phase 8's
+  own `max` by `floor_ratio_delta` among flagged candidates) instead --
+  verified this restores real per-team variation matching Phase 8's own
+  documented result exactly (6 teams land on D/ST, 1 on TE, 1 on K).
+- **"Playoff schedule difficulty" = `TeamPlayoffPlan.recommendation`,
+  surfaced verbatim as `playoff_schedule_note`** -- Phase 8's own
+  server-synthesized playoff-window narrative, not reworded or recomputed.
+  Shown per team in the league-wide comparison table on the page.
+- **"Biggest threat" is a lexicographic selection, not a blended composite:**
+  filter every OTHER team to those with a real structural strength (per the
+  above) at the exact slot label that is also the selected team's own real
+  structural weakness (the single `weakest_slot`), then, among that
+  candidate set, pick the one with the highest simulated `title_probability`
+  -- a real contender who is ALSO specifically built to exploit that
+  specific gap, not merely "a good team." Same "no arbitrary weighted score"
+  discipline `sim.api.draft_autopsy_view` (best/worst pick) and
+  `sim.api.waiver_intelligence_view` (candidate ranking) already established
+  for this codebase. If no rival has a real positional overlap with the
+  selected team's own weakness (a real, honest possibility -- verified this
+  branch fires for some teams live), the fallback is the single
+  highest-title-probability rival league-wide, with a reasoning sentence
+  that says exactly that ("the strongest team in the league, not a specific
+  positional matchup") rather than forcing a positional narrative the data
+  doesn't support.
+- **"Real advantage" is the mirror-image comparison, anchored to the
+  identified threat specifically (not the field in the abstract), so the two
+  cards read as one coherent head-to-head:** a slot counts as the selected
+  team's real advantage when it is one of their own real strengths AND one
+  of the identified threat's own real weakness. Falls back to the selected
+  team's single best slot league-wide (with an honest "the threat isn't
+  specifically thin here" sentence) when no slot clears both bars.
+- **"Which positions not to trade away" reuses Phase 9b's Waiver
+  Intelligence Signal 3/4 rule (bench-depth-by-position, per-team, across
+  the whole league) applied to the opposite side of the transaction.**
+  Waiver Intelligence asks "who should I add" (does a rival have depth I
+  lack); this asks "who would benefit if I traded this away" (do I have
+  depth a rival lacks). For each of QB/RB/WR/TE (the same
+  `_BENCH_DEPTH_RELEVANT_POSITIONS` Phase 9b/7 already established -- K/D-ST
+  bench depth is a near-constant in this league, not a real per-team
+  signal), a trade caution fires only when BOTH the selected team carries at
+  least one real bench player there (named directly, not just counted) AND
+  at least one other real team has zero bench depth at that same position.
+  `_team_bench_names_by_position` reimplements the counting rule locally
+  (not imported from `roster_view`/`waiver_intelligence_view`), following
+  those modules' own established precedent: the rule is shared, the local
+  data shape (real player names, not just a count) is not. An empty
+  `trade_cautions` list is a real, honest result (verified live: Milking
+  the McCaffinator has none right now) -- not a bug or a forced claim.
+- **Every reasoning sentence names real players, real teams, and real
+  numbers, per PLAN.md's explicit requirement.** Player names come from a
+  new, purpose-built `_team_slot_starters` (starter names by slot label) and
+  the extended `_team_bench_names_by_position` (bench names by position,
+  built on the same rule Phase 8/9b already use for counts) -- both parsed
+  directly from the same raw payload's roster entries, matching every other
+  view module's "re-derive from raw, don't import another module's Postgres-
+  only function" convention. Verified live for two different selected teams
+  that biggest-threat/real-advantage/trade-caution text is genuinely
+  different per team (see the route test
+  `test_route_matches_a_direct_compute_call` and the live browser check
+  below), not a template with only the team name swapped in.
+- **Bug fixed before shipping: ordinal-suffix formatting.** An initial pass
+  hardcoded `f"{percentile:.0f}th"` in three reasoning sentences (backend)
+  and `.toFixed(0)}th` in the league comparison table (frontend), which
+  renders real values like 71 and 86 as "71th"/"86th" instead of
+  "71st"/"86th". Fixed with a small `_ordinal()` helper in
+  `beat_my_league_view.py` and by reusing `web/lib/format.ts`'s existing
+  `ordinal()` (already used elsewhere in this app for 0-indexed finish
+  places -- called here as `ordinal(percentile - 1)` since percentile is
+  already a 1-indexed number, unlike finish place). Verified live in the
+  browser and via a direct curl of the route after the fix.
+- **New route: `GET /league/{id}/beat-my-league/{team_id}`**, following
+  every established pattern exactly: `resolve_season_id` for the optional
+  season, `LeagueNotIngestedError`/`UnknownTeamError` -> 404,
+  `IngestError`/`ParamsError` subclasses -> 409, a thin
+  `_compute_from_raw`/`compute_beat_my_league` split for fast Postgres-free
+  unit tests (`sim/tests/test_api_beat_my_league.py`, 12 new tests,
+  including a direct regression test for the weakest-slot bug above and a
+  title-probability-matches-playoff-planner-exactly equivalence test).
+- **UI: team switcher is a server-navigated `?team=` link row
+  (`components/beat-my-league/team-picker.tsx`), matching Lineup
+  Optimizer's and Waiver Intelligence's exact established pattern** -- this
+  app has no auth/league-picker (Phase 5b), so a real per-team live
+  computation needs the same URL-driven "the user's team" selector every
+  other per-team page already uses. `ThreatCard` (destructive-tinted) and
+  `AdvantageCard` (primary-tinted) sit side by side as the page's headline
+  pair -- the one head-to-head comparison that matters -- with
+  `TradeCautionList` (brand-accent, matching `RecommendationCallout`'s
+  "lead with the action" treatment) directly below. `LeagueComparisonTable`
+  (a real shadcn `Table`, per the ui-ux-pro-max skill's stack guidance --
+  not a div grid) is the full-league Comparative Analysis Dashboard context
+  below the fold, highlighting the selected team ("You" badge) and the
+  identified threat ("Threat" badge) in place among all 8 teams sorted by
+  title odds; its "Playoff schedule difficulty" column carries the full,
+  untruncated per-team narrative and scrolls horizontally within its own
+  wrapper at narrow widths, matching the Draft Autopsy board's established
+  wide-table convention rather than truncating real text.
+- **Verification**: `pytest -q` 198 passed (186 from Phases 0-9b plus 12 new
+  in `sim/tests/test_api_beat_my_league.py`); `mypy --strict sim ingest` 21
+  pre-existing errors (0 new); `ruff check sim ingest db scripts` shows only
+  the same pre-existing findings in files this phase didn't touch (0 new in
+  any Phase 10 file). Web: `tsc --noEmit`, `eslint .`, and `npm run build`
+  (production) all clean. Visually verified in a real browser (uvicorn +
+  Next.js dev server, both against the real league, `league_id=885686492`)
+  at 375px, 768px, 1024px, and 1440px for two different selected teams
+  (Chinese Chongqing Dockers and Milking the McCaffinator): threat, advantage,
+  and trade-caution content is genuinely different per team (different rival
+  named as the threat, different slot as the advantage, one team shows a
+  real trade caution while the other shows the honest empty state); confirmed
+  `document.documentElement.scrollWidth === clientWidth` at all four widths
+  (no page-level horizontal scroll) and zero console errors at any width.
+  Hit the same known screenshot/scroll tooling artifact Phases 8/9a/9b
+  already flagged (a `computer` scroll+screenshot call hung and reported the
+  pane as hidden) once, on the first scroll-down attempt; cross-checked
+  immediately with a fresh tab plus `get_page_text` and
+  `document.body.innerText` via the JS tool, both of which returned the
+  full, correct real page content (including the ordinal-suffix fix,
+  verified as "71st" not "71th") -- confirmed a tooling artifact, not an
+  app bug, the same conclusion reached under the same symptom in three
+  prior phases.

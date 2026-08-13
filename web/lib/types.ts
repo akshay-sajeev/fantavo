@@ -396,3 +396,70 @@ export interface WaiverIntelligenceResponse {
   ownership_data_note: string;
   groups: WaiverPositionGroup[];
 }
+
+/**
+ * Mirrors sim.api.app.TeamLeagueProfileOut / sim.api.beat_my_league_view.TeamLeagueProfile.
+ * `strengths`/`weaknesses` are a pure selection over Playoff Planner's own
+ * `SlotPlayoffStrength` list (never a new formula) -- `weaknesses` is
+ * always 0 or 1 entries (Playoff Planner's own single `weakest_slot`, not
+ * every slot that clears `is_playoff_specific_weakness`; see
+ * sim.api.beat_my_league_view's module docstring for why the raw flagged
+ * set is not team-differentiating in this league -- K clears it for every
+ * real team). `playoff_schedule_note` is Playoff Planner's own
+ * server-synthesized recommendation, surfaced verbatim.
+ */
+export interface TeamLeagueProfile {
+  team_id: number;
+  team_name: string;
+  title_probability: number;
+  playoff_probability: number;
+  finish_distribution: number[];
+  strengths: SlotPlayoffStrength[];
+  weaknesses: SlotPlayoffStrength[];
+  playoff_schedule_note: string;
+}
+
+/** Mirrors sim.api.app.RivalThreatOut. `overlapping_slots` is empty when no
+ * rival has a real structural strength at the user's own real weakness --
+ * an honest fallback (named by highest title odds league-wide instead), not
+ * a bug -- see `reasoning` for which case fired. */
+export interface RivalThreat {
+  team_id: number;
+  team_name: string;
+  title_probability: number;
+  overlapping_slots: string[];
+  reasoning: string;
+}
+
+export interface TeamAdvantage {
+  slots: string[];
+  reasoning: string;
+}
+
+/** Mirrors sim.api.app.TradeCautionOut. A real bench-depth surplus at
+ * `position` for the requesting team, at least one rival with zero depth
+ * there (the same rule sim.api.waiver_intelligence_view's Signal 4 already
+ * computes, applied to trades instead of waivers). */
+export interface TradeCaution {
+  position: string;
+  team_bench_depth_at_position: number;
+  bench_player_names: string[];
+  rival_teams_with_need: string[];
+  reasoning: string;
+}
+
+/** Mirrors sim.api.app.BeatMyLeagueResponse. `trade_cautions` can be a real,
+ * honest empty array for a team with no positional trade leverage anywhere
+ * in the league right now. */
+export interface BeatMyLeagueResponse {
+  league_id: number;
+  season_id: number;
+  team_id: number;
+  team_name: string;
+  seed: number;
+  n_sims: number;
+  teams: TeamLeagueProfile[];
+  biggest_threat: RivalThreat;
+  real_advantage: TeamAdvantage;
+  trade_cautions: TradeCaution[];
+}

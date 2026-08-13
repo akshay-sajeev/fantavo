@@ -1,5 +1,6 @@
 import "server-only";
 import type {
+  BeatMyLeagueResponse,
   DraftAutopsyResponse,
   LineupOptimizerResponse,
   PlayoffPlannerResponse,
@@ -196,4 +197,20 @@ export function getWaiverIntelligence(
     `/league/${leagueId}/waiver-intelligence/${teamId}`,
     { season_id: seasonId },
   );
+}
+
+/** GET /league/{id}/beat-my-league/{team_id} -- see
+ * sim.api.beat_my_league_view for the full methodology: every team's title
+ * odds / structural strengths & weaknesses / playoff schedule difficulty
+ * (all reused from Playoff Planner's own already-computed output, never
+ * recomputed), plus one selected team's biggest threat, real advantage, and
+ * which positions not to trade away. */
+export function getBeatMyLeague(
+  leagueId: number,
+  teamId: number,
+  seasonId?: number,
+): Promise<BeatMyLeagueResponse> {
+  return getJson<BeatMyLeagueResponse>(`/league/${leagueId}/beat-my-league/${teamId}`, {
+    season_id: seasonId,
+  });
 }
