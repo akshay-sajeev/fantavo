@@ -5,6 +5,7 @@ import { CurrentMatchupCard } from "@/components/dashboard/current-matchup-card"
 import { RemainingScheduleTable } from "@/components/dashboard/remaining-schedule-table";
 import { RostersGrid } from "@/components/dashboard/rosters-grid";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Reveal, RevealItem } from "@/components/ui/motion";
 
 export default async function DashboardPage({
   params,
@@ -39,8 +40,8 @@ export default async function DashboardPage({
         </p>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2">
+      <Reveal className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <RevealItem className="lg:col-span-2">
           <Card>
             <CardHeader>
               <CardTitle className="font-heading text-base">Standings</CardTitle>
@@ -49,16 +50,20 @@ export default async function DashboardPage({
               <StandingsTable simulation={simulation} schedule={schedule} />
             </CardContent>
           </Card>
-        </div>
-        <CurrentMatchupCard schedule={schedule} />
-      </div>
+        </RevealItem>
+        <RevealItem>
+          <CurrentMatchupCard schedule={schedule} />
+        </RevealItem>
+      </Reveal>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2">
+      <Reveal className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <RevealItem className="lg:col-span-2">
           <RostersGrid teams={roster.teams} />
-        </div>
-        <RemainingScheduleTable schedule={schedule} />
-      </div>
+        </RevealItem>
+        <RevealItem>
+          <RemainingScheduleTable schedule={schedule} />
+        </RevealItem>
+      </Reveal>
     </div>
   );
 }
