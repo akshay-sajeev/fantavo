@@ -1,5 +1,7 @@
 import "server-only";
 import type {
+  AnalystChatResponse,
+  AnalystMessage,
   BeatMyLeagueResponse,
   DraftAutopsyResponse,
   LineupOptimizerResponse,
@@ -230,4 +232,19 @@ export function getPowerRankingRoast(
   return getJson<PowerRankingRoastResponse>(`/league/${leagueId}/power-ranking-roast`, {
     season_id: seasonId,
   });
+}
+
+/** POST /league/{id}/analyst/{team_id} -- the AI league analyst's real
+ * Gemini tool-calling loop (sim.api.analyst_view / sim.api.analyst_tools).
+ * `messages` is the full persisted transcript so far (oldest first, ending
+ * in the newest user turn) -- the sim API keeps no session state. Every
+ * number in the response's `reply` traces back to a real `tool_calls[i]`
+ * result; `citations`/`spans` let the frontend render cited numbers as
+ * real components without computing anything itself. */
+export function postAnalystChat(
+  leagueId: number,
+  teamId: number,
+  body: { season_id?: number; messages: AnalystMessage[] },
+): Promise<AnalystChatResponse> {
+  return postJson<AnalystChatResponse>(`/league/${leagueId}/analyst/${teamId}`, body);
 }

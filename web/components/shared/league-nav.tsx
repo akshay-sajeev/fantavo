@@ -18,6 +18,7 @@ export function LeagueNav({ leagueId }: { leagueId: number }) {
     { href: `${base}/waivers`, label: "Waiver Intelligence" },
     { href: `${base}/beat-my-league`, label: "Beat My League" },
     { href: `${base}/roast`, label: "Roast" },
+    { href: `${base}/analyst`, label: "AI Analyst" },
   ];
 
   return (

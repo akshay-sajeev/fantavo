@@ -1978,3 +1978,224 @@ true" -- do not hold here yet, since there is no played-week stat to be true
 about. Deferred alongside Weekly Recap, correctly sequenced after this league
 has actually played at least one real week. No code was written for this
 sub-feature; nothing needs undoing when that day comes.
+
+## Phase 13 — AI analyst
+
+- **SDK: `google-genai` (the official, current Google Gen AI Python SDK, `from google import
+  genai` / `from google.genai import types`), not the legacy `google-generativeai` package.**
+  Confirmed installed (1.75.0), ships a real `py.typed` marker (no mypy override needed, unlike
+  apscheduler/scipy), and its `types.FunctionDeclaration`/`types.Tool`/`types.GenerateContentConfig`
+  surface is the current documented pattern for manual (non-automatic) function-calling loops --
+  used deliberately with `automatic_function_calling=AutomaticFunctionCallingConfig(disable=True)`
+  so this module decides exactly when/how each tool runs and logs every real result itself, rather
+  than the SDK silently calling plain Python callables and hiding that from the citation-building
+  pass.
+- **Model: `gemini-flash-lite-latest`, arrived at after a real investigation during this phase's
+  own live verification, not picked from memory.** First tried `gemini-2.5-flash` (a dated
+  snapshot) -- it still appears in `client.models.list()` but a live call returned a real
+  `404 NOT_FOUND: "This model ... is no longer available to new users"` from this freshly-created
+  API key. Switched to `gemini-flash-latest` (Google's own stable alias for its current-recommended
+  fast tier, not a snapshot) -- this worked functionally (confirmed live, correct real tool calls)
+  but was returning real, reproducible `503 UNAVAILABLE: "This model is currently experiencing high
+  demand"` errors during this verification window, confirmed via direct raw REST calls with no SDK
+  retry logic involved (so not an artifact of this codebase's retry/timeout handling). Switched to
+  `gemini-flash-lite-latest` -- responded in under a second with correct real tool calls in every
+  live test that followed, and is also the more cost-conscious choice PLAN.md's own "be reasonably
+  economical" instruction asks for. All three findings are recorded directly in
+  `sim/api/analyst_view.py`'s `MODEL_NAME` comment, not just here, since a future session hitting
+  the same 404/503 pattern needs the same investigation trail.
+- **Tool-to-endpoint mapping, one thin wrapper per tool in `sim/api/analyst_tools.py`, each calling
+  the same already-tested `sim.api` function its matching HTTP route calls** (never a second HTTP
+  round trip, never a re-derivation): `get_team_odds` -> `sim.api.cache.read_cached_simulation`
+  (`GET /simulation`); `get_waiver_targets` -> `sim.api.waiver_intelligence_view.compute_waiver_intelligence`;
+  `get_playoff_outlook` -> `sim.api.playoff_planner_view.compute_playoff_planner`; `get_league_threats`
+  -> `sim.api.beat_my_league_view.compute_beat_my_league`; `get_trade_impact` ->
+  `sim.api.params_loader.load_league` + a live `sim.engine.simulate_seasons()` call via
+  `roster_overrides`, the identical engine call `POST /whatif` and the Trade Builder UI (Phase 6)
+  already make, just invoked in-process instead of over a second HTTP hop within the same request.
+- **`get_roster_weaknesses` -> `GET /league/{id}/roster` (`sim.api.roster_view`: `risk_rating`,
+  `positional_concentration`, per-player floor/ceiling/availability) -- chosen over
+  `beat_my_league_view`'s playoff-window weakness selection, and documented as a deliberate choice,
+  not a default.** Roster view's signal is the more literal, direct answer to "what is my roster's
+  weakness": it's roster composition itself (which starting positions have zero same-position bench
+  depth, which players carry real availability risk) rather than a derived, playoff-simulation-
+  specific signal. Beat My League's own weakness selection (`TeamPlayoffPlan.weakest_slot`) is not
+  wasted -- it's exactly what backs `get_league_threats` instead (the threat/advantage/trade-caution
+  narrative Phase 10 already built is a more natural, richer answer to "who is my biggest threat"
+  than to "what is my weakness" in isolation). This keeps the two tools genuinely complementary
+  rather than two thin wrappers around the same underlying signal.
+- **Team-name resolution (`_resolve_team_id` in `sim/api/analyst_tools.py`) is deliberately
+  conservative: exact case-insensitive match, then a substring match ONLY if unique, else an honest
+  error listing every real team name.** The model is never allowed to guess which `team_id` a name
+  maps to -- CLAUDE.md's "no invented numbers" rule applied to team identity, not just stats. The
+  bound "my team" (from the URL's `team_id`, chosen by the frontend's team-switcher, matching every
+  per-team page since Lineup Optimizer) is always the default when a tool's optional `team_name`
+  arg is omitted, never guessed by the model either.
+- **`get_trade_impact` hard-requires real, currently-rostered starter names on both sides and
+  refuses a vague "should I trade with X" with no players named** -- the system prompt tells the
+  model to first call `get_roster_weaknesses` / `get_league_threats` / `get_waiver_targets` to find
+  a real, specifically-named candidate trade if the user didn't name one, then call this tool with
+  those exact real names. Verified live: asked "Should I trade with Milking the McCaffinator? I
+  could offer them my Eagles D/ST for one of their bench players" (deliberately vague on the receive
+  side) -- the model called `get_roster_weaknesses` on both teams first, found a real bench player
+  (Rome Odunze), then called `get_trade_impact` with that exact real name on both sides. Player-name
+  resolution and the swapped-roster construction (remove the traded-away player's `PlayerParams`
+  from that team's real current starters, add the traded-in one) mirrors
+  `web/components/whatif/trade-builder.tsx`'s exact logic, and the before/after `simulate_seasons()`
+  calls share one seed (common random numbers) so the reported delta reflects only the roster
+  change, the same pattern `whatif-compare/route.ts` already established for the Trade Builder UI.
+- **Real bug found and fixed during this phase's own live verification, before the UI was ever
+  touched: `get_playoff_outlook`'s `projected_seed` crashed the real Gemini call outright.**
+  `scipy.optimize.linear_sum_assignment` (inside `sim.api.playoff_planner_view`) returns
+  `numpy.int64` seed indices; `sim/api/app.py`'s Pydantic response model silently coerces that to a
+  plain `int` on the HTTP path, but this phase's raw-dict tool result skips Pydantic entirely, so
+  `google-genai`'s own `json.dumps()` of the tool result raised `TypeError: Object of type int64 is
+  not JSON serializable` -- caught live (not simulated) via a real `curl` against the running
+  service, root-caused with a standalone script that walked every tool's result through `json.dumps`
+  field-by-field. Fixed with an explicit `int(...)` cast in `tool_get_playoff_outlook`, and a new
+  regression test (`test_every_tool_result_is_json_serializable`) added to
+  `sim/tests/test_api_analyst_tools.py` that runs every tool's real result through `json.dumps`
+  directly, specifically so a similar numpy leak in any of the six tools fails a fast, offline,
+  free test next time instead of only a live (paid) Gemini call.
+- **Citation/span design: the model never emits a citation marker itself -- a deterministic,
+  server-side, fully offline-testable pass matches percentages the model actually wrote in its own
+  final text against real numbers extracted from that turn's tool results.**
+  `sim/api/analyst_view._extract_citable_numbers` is plain field extraction (never a computation)
+  over each tool's already-real result dict, normalizing every citable value onto one consistent
+  0-100 percent scale (a probability fraction like `0.223` is multiplied by 100; an ESPN
+  `percent_owned` figure, already 0-100, is used as-is -- covered by its own regression test so the
+  two scales are never conflated). `_match_citations_in_text` then regex-scans the model's own
+  `reply` for percentage-shaped substrings (e.g. "22.3%") and links each one to the closest real
+  citation within a small rounding tolerance (0.5 percentage points, covering the model rounding a
+  real value to the nearest whole percent or one decimal) -- an unrelated percentage with no
+  close-enough real citation is left as plain, unlinked text rather than forced to match. This was
+  chosen deliberately over asking the model to emit an explicit citation-index token next to every
+  number: an LLM reliably emitting an exact index token is not something this codebase can verify or
+  unit-test without a live (paid) model call every single time, whereas matching a number the model
+  already wrote back against real tool data is fully deterministic and covered by
+  `sim/tests/test_api_analyst_view.py` with zero network calls. The response
+  (`AnalystChatResponse.citations`/`.spans`) gives the frontend exact character offsets into `reply`
+  plus the real value/subject/source-tool for each -- `web/lib/analyst.ts::tokenizeMessage` (see
+  below) is the only place that structure gets turned into a rendered `<StatChip>`, never a second
+  computation.
+- **No server-side chat session state -- the client resends the full transcript on every
+  request.** `AnalystChatRequest.messages` is the complete oldest-first turn history; `sim.api`
+  has no session store anywhere else in this app (no auth, no league-picker, per Phase 5b), so this
+  matches that existing design rather than introducing the first piece of server-side session state
+  in the whole codebase. Internal tool-calling round trips within one model turn are never persisted
+  -- only user/model text turns are, matching `sim.api.analyst_view.AnalystMessage`'s documented
+  contract.
+- **Frontend team scoping: `?team=` server-navigated links (`components/analyst/team-picker.tsx`),
+  identical to Lineup Optimizer / Waiver Intelligence / Beat My League's established pattern** --
+  this app has no auth/league-picker, so "my team" for a brand-new conversation is chosen the same
+  URL-driven way every other per-team page already does. Switching teams intentionally resets the
+  chat (`key={selected.team_id}` on `<AnalystChat>`) -- a different team is a different conversation
+  scope, not a client-side toggle on the same one.
+- **Next.js route (`app/api/league/[leagueId]/analyst/[teamId]/route.ts`) is orchestration only --
+  a thin pass-through to `POST /league/{id}/analyst/{team_id}`, matching
+  `whatif-compare/route.ts`/`season-replay/route.ts`'s exact established "no analytics logic, just
+  forwarding" pattern.** `GEMINI_API_KEY` is read only by the Python `sim` service
+  (`sim/api/env.py`/`sim/api/analyst_view.py`); it never reaches this Next.js route, the browser
+  bundle, or any client component -- the same "web layer's only path to the sim API" boundary
+  `lib/api.ts` already enforces for every other feature.
+- **New non-destructive `.env` loader (`sim/api/env.py`), called once at `sim/api/app.py` import
+  time.** No earlier phase's `sim.api` service ever needed to read `.env` itself (`DATABASE_URL` has
+  a safe non-secret default; `ESPN_S2`/`SWID` are only ever read by the one-off
+  `scripts/fetch_fixture.py` CLI script). `GEMINI_API_KEY` has no safe default and is the first
+  secret the always-running FastAPI service itself needs, so `uvicorn sim.api.app:app` must pick it
+  up from the repo-root `.env` without the caller exporting it manually first. Mirrors
+  `scripts/fetch_fixture.py::load_env`'s exact parsing and its exact safety property
+  (`os.environ.setdefault`, never overwrite a real shell-exported value) -- and, per this phase's
+  explicit secrets discipline, never logs or prints anything it loads.
+- **`pyproject.toml` gained a real `[project]` table (this repo's first) with `google-genai` as an
+  explicit dependency, per this phase's own instruction -- deliberately NOT a retroactive backfill
+  of every other ad hoc `pip3 install` from Phases 0-12** (fastapi, psycopg, scipy, apscheduler,
+  etc. stay exactly as ad hoc-installed as before; see docs/decisions.md Phases 1/3/4 for why that
+  pattern exists). Narrowly scoped to what this phase's brief actually asked for.
+- **Adding `[project.requires-python]` had a real, unwanted side effect, caught before it shipped:
+  it changed ruff's auto-detected lint target-version, which activated ~28 new "modernize for a
+  newer Python" findings (`UP017`, `datetime.UTC`) across pre-existing test files this phase never
+  touched.** Fixed by explicitly pinning `target-version = "py310"` under `[tool.ruff]`, matching
+  ruff's own prior unset-target-version fallback -- confirmed with a `git stash`/re-run comparison
+  that this restores the exact pre-existing 5-finding baseline (0 new). A lint-configuration choice
+  only; `requires-python = ">=3.12"` itself is accurate and unchanged (CLAUDE.md already states
+  Python 3.12 for `/sim`).
+- **Citation-rendering bugs found and fixed live in the browser, not just in code review --
+  documented because both are genuine, non-obvious interactions, not typos.** (1) A first two-pass
+  design (split text by citation span, then bold-format each leftover text fragment independently)
+  left stray literal `**` characters visible whenever a citation happened to sit inside a bold run
+  (the model's own habit: `**18.2%**`, bolding the whole clause including the cited number) --
+  because the two `**` delimiters ended up in two different fragments, split apart by the citation
+  in between, so neither fragment had a complete pair to recognize. Fixed by replacing the two-pass
+  design with `web/lib/analyst.ts::tokenizeMessage`, a single left-to-right pass that tracks
+  bold/italic state and citation-span position simultaneously, so a citation nested inside a
+  bold/italic run renders as a `<StatChip>` (dropping the surrounding markers entirely, not
+  preserving them) with no possible fragment-boundary mismatch. (2) While fixing that, also handled
+  two more plain LLM markdown habits verified live in real responses: `#`/`##`/... headings (dropped,
+  rest of the line renders bold) and `* `/`- ` line-start bullets (replaced with a real "•" glyph) --
+  plus lone `*italic*` runs (verified live: "rival teams *Captain Jahmyrica* and *Milking the
+  McCaffinator*" rendered with literal asterisks before the fix, real italics after). All of this
+  lives in one pure, offline-testable function (`web/lib/analyst.ts`), composed by
+  `components/analyst/message-content.tsx` into JSX -- CLAUDE.md's "no analytics logic in
+  components" boundary, applied to formatting/rendering logic instead of a computed statistic.
+- **`StatChip` (`components/analyst/stat-chip.tsx`) uses the existing `--brand-accent` design
+  tokens (amber, established in Phase 5b), not a new color** -- consistent with this app's existing
+  "amber = highlight/CTA/real-recommendation" convention (`RecommendationCallout`,
+  `TeamPlayoffPlan`'s champion segment, etc.), and satisfies PLAN.md's literal words for this
+  feature ("When the analyst mentions a probability, show it") as a real inline component, not a
+  bare number in a paragraph. The chip's own text (`citation.display`) is always plainly visible,
+  never hover-only, per MASTER.md's compact-label accessibility guidance queried for this phase; the
+  `title` attribute adds supplementary (not essential) context about which tool produced the number.
+- **Verification -- backend**: `pytest -q` 242 passed (211 from Phases 0-12 plus 31 new: 17 in
+  `sim/tests/test_api_analyst_tools.py`, 14 in `sim/tests/test_api_analyst_view.py`); `mypy --strict
+  sim ingest` 21 pre-existing errors (0 new, including in the two new test files and
+  `sim/api/analyst_view.py`'s one narrow `cast(Any, ...)` at the one call boundary where
+  `google-genai`'s own `contents` parameter type is stricter than necessary under mypy's
+  invariant-list rule -- documented inline, not a blanket per-file ignore); `ruff check sim ingest`
+  5 pre-existing findings (0 new). `sim/tests/test_engine.py` and its golden values were not
+  touched. All new Postgres-backed tests use the real league fixture (`league_id=885686492`)
+  through the real `ingest_league` path, per this file's own established convention; `run_analyst_turn`
+  tests inject a fake `genai.Client` stand-in (built from real `google.genai.types` response
+  objects, not mocked types) so the tool-execution/citation-matching logic is verified with zero
+  real network calls, matching CLAUDE.md's "fixtures, not live calls" discipline extended to this
+  new external dependency.
+- **Verification -- frontend**: `npx tsc --noEmit`, `npx eslint .`, and `npm run build` (production)
+  all clean throughout, including after every live-verification-driven fix.
+- **Verification -- real, live, paid Gemini round trips (not mocked/stubbed), against the real
+  league (`league_id=885686492`) via a real running `uvicorn` + Postgres stack, covering every
+  question in PLAN.md's "Handles" list, each cross-checked against a direct `curl` of the real
+  underlying endpoint for exact-match confirmation:**
+  - "Why am I projected to lose the title this year?" -> `get_team_odds` + `get_playoff_outlook`;
+    reply cited 16.7%/64.4% (team 1's own title/playoff odds), 22.3% (the real title-odds leader),
+    and the real D/ST/K playoff-window weakness with exact real floor-ratio numbers (67%/87%) --
+    all confirmed byte-for-byte against `GET /simulation` and `GET /playoff-planner`.
+  - "What is my biggest weakness?" -> `get_roster_weaknesses`; reply named the exact real
+    `positional_concentration` strings ("No bench depth at D/ST", "No bench depth at K") --
+    confirmed against `GET /roster`.
+  - "Who is my biggest threat in this league and why?" -> `get_league_threats`; reply named the
+    real rival (team_id=4, "."), the real overlapping slot (D/ST), the real advantage slot (FLEX,
+    Jeremiyah Love), and a real trade caution (Harold Fannin Jr., naming both real rivals with zero
+    TE bench depth) -- confirmed field-for-field against `GET /beat-my-league/1`.
+  - "What should I target on waivers this week?" -> `get_waiver_targets`; reply named real
+    candidates with real projections/ownership at every position -- confirmed against
+    `GET /waiver-intelligence/1`.
+  - "Should I trade with Milking the McCaffinator? ... one of their bench players." ->
+    `get_roster_weaknesses` (both teams) then `get_trade_impact`; reply cited real before/after
+    title/playoff probabilities and real deltas for both teams from a genuine live
+    `simulate_seasons(n_sims=2000)` call (seed `4137697144`) -- deltas verified to equal
+    `after - before` exactly on the raw tool result.
+  Verified in the actual browser (not just via `curl`) too: submitted real questions through the
+  live chat UI at desktop (1280px+), tablet (768px), and mobile (375px) widths; confirmed the
+  loading state (`aria-busy`, spinner, disabled input) renders correctly while a live call is in
+  flight; confirmed zero console errors on fresh tabs; confirmed `document.documentElement.scrollWidth
+  === clientWidth` at 375px (no page-level horizontal scroll) even with a long multi-position waiver
+  response. Hit the exact screenshot/interaction-hang tooling artifact flagged in every phase since
+  Playoff Planner (Phase 8) once during this verification (a `left_click` call timed out with "the
+  Browser pane is currently hidden") -- opened a fresh tab per that established playbook, which
+  resolved it immediately; also hit one genuinely stale-console-buffer false alarm (an old renamed-
+  function error kept appearing in `read_console_messages` after the fix already shipped and
+  `npm run build` was already clean) -- confirmed it was a stale buffer, not a live bug, the same
+  way prior phases confirmed their own tooling artifacts, by opening a fresh tab and re-checking.
+  A real, external Gemini-side 503 "high demand" period on `gemini-flash-latest` was also observed
+  live during this same window (see the model-choice note above) -- not a tooling artifact, a real
+  transient upstream condition, worked around by the model switch rather than by retrying blindly.

@@ -502,3 +502,60 @@ export interface PowerRankingRoastResponse {
   has_draft_data: boolean;
   teams: TeamRoast[];
 }
+
+/** Mirrors sim.api.app.AnalystMessageIn. One turn of the persisted chat
+ * transcript. The sim API keeps no session state -- the client resends the
+ * full transcript (oldest first) on every request. */
+export interface AnalystMessage {
+  role: "user" | "model";
+  text: string;
+}
+
+/** Mirrors sim.api.app.AnalystCitationOut / sim.api.analyst_view.Citation.
+ * One real numeric fact extracted verbatim from a tool result this turn --
+ * `percent` is always on a 0-100 scale regardless of which tool it came
+ * from, so every citation renders the same way. Never computed by this
+ * app's web layer. */
+export interface AnalystCitation {
+  index: number;
+  source_tool: string;
+  kind: string;
+  subject: string;
+  percent: number;
+  display: string;
+}
+
+/** Mirrors sim.api.app.AnalystSpanOut / sim.api.analyst_view.CitationSpan.
+ * A character range in the enclosing message's `reply` text where a real
+ * citation's value was found -- see sim.api.analyst_view's module
+ * docstring for the exact (deterministic, server-side) matching rule. The
+ * frontend only ever slices `reply` at these offsets and renders a
+ * <StatChip> in place of the plain text; it never decides which numbers
+ * are "real" itself. */
+export interface AnalystSpan {
+  start: number;
+  end: number;
+  citation_index: number;
+}
+
+/** Mirrors sim.api.app.AnalystToolCallOut. One real tool invocation this
+ * turn made, verbatim -- kept so a reader (or this phase's own manual
+ * verification step) can cross-check any number in `reply` against the
+ * exact tool result it came from. */
+export interface AnalystToolCall {
+  name: string;
+  args: Record<string, unknown>;
+  result: Record<string, unknown>;
+}
+
+/** Mirrors sim.api.app.AnalystChatResponse. */
+export interface AnalystChatResponse {
+  league_id: number;
+  season_id: number;
+  team_id: number;
+  team_name: string;
+  reply: string;
+  citations: AnalystCitation[];
+  spans: AnalystSpan[];
+  tool_calls: AnalystToolCall[];
+}

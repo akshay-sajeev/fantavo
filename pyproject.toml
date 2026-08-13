@@ -1,3 +1,20 @@
+[project]
+name = "fantavo"
+version = "0.1.0"
+requires-python = ">=3.12"
+# Every other dependency this repo uses (numpy, pytest, fastapi, psycopg,
+# ...) was installed ad hoc across Phases 0-12 with no pyproject.toml entry
+# -- see docs/decisions.md Phase 1/3/4 for why (no requirements.txt existed
+# either, so each phase followed the same pattern rather than introduce a
+# new dependency-management convention unilaterally). This phase's brief
+# explicitly asks for google-genai to be "a real dependency (pyproject.toml)",
+# so it is declared here rather than repeating that ad hoc pattern a 13th
+# time -- narrowly scoped to this phase's own new dependency, not a
+# retroactive backfill of every earlier ad hoc install.
+dependencies = [
+    "google-genai>=1.0.0",
+]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["sim/tests", "ingest/tests"]
@@ -22,3 +39,12 @@ ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 96
+# Pinned explicitly so adding [project.requires-python] above (needed to
+# declare google-genai as a real dependency) doesn't change ruff's inferred
+# target-version and silently activate a wave of new "modernize for a newer
+# Python" lint findings (e.g. UP017, datetime.UTC) across every pre-existing
+# file this phase didn't touch. Matches ruff's own prior unset-target-version
+# fallback (see docs/decisions.md Phase 13) -- a lint-configuration choice,
+# not a statement about which Python this project actually runs on (see
+# requires-python above and CLAUDE.md for that).
+target-version = "py310"

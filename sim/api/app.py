@@ -17,6 +17,10 @@ in route handlers" rules both apply directly here.
                                            ranked free-agent priority list, per team
     GET  /league/{league_id}/power-ranking-roast
                                            good-natured, fact-grounded roast per team
+    POST /league/{league_id}/analyst/{team_id}
+                                           AI league analyst -- Gemini tool-calling
+                                           over the six routes above (see
+                                           sim.api.analyst_view / sim.api.analyst_tools)
 
 Both routes accept the ingest schema's real grain: an optional `season_id`
 (query param on GET, body field on POST). If omitted, the most recently
@@ -40,7 +44,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -50,6 +54,13 @@ from pydantic import BaseModel, Field
 
 from ingest.db import DEFAULT_DEV_DSN, connect, dsn_from_env
 from ingest.errors import IngestError
+from sim.api.analyst_tools import UnknownAnalystTeamError
+from sim.api.analyst_view import (
+    AnalystConfigError,
+    AnalystMessage,
+    AnalystTurnResult,
+    run_analyst_turn,
+)
 from sim.api.beat_my_league_view import (
     BeatMyLeagueResult,
     RivalThreat,
@@ -68,6 +79,7 @@ from sim.api.draft_autopsy_view import (
     TeamDraftAutopsy,
     compute_draft_autopsy,
 )
+from sim.api.env import load_dotenv_once
 from sim.api.lineup_optimizer_view import (
     LineupOptimizerResult,
     LineupProjection,
@@ -107,6 +119,13 @@ from sim.api.waiver_intelligence_view import (
 )
 from sim.engine import PlayerParams, simulate_seasons
 from sim.params.errors import ParamsError
+
+# So `uvicorn sim.api.app:app` can pick up GEMINI_API_KEY (and any future
+# .env-only setting) from the repo-root .env without the caller having to
+# `export` it manually first -- see sim.api.env's docstring. Non-destructive
+# (setdefault only) and called once, at import time, before any request
+# (including the analyst route) can run.
+load_dotenv_once()
 
 logger = logging.getLogger(__name__)
 
@@ -915,6 +934,103 @@ def _to_team_roast_out(team: TeamRoast) -> TeamRoastOut:
     )
 
 
+class AnalystMessageIn(BaseModel):
+    """One turn of the persisted chat transcript, oldest first, ending in
+    the newest user message. This service keeps no session state -- the
+    frontend resends the full transcript on every request, the same
+    no-auth/no-session-store convention the rest of this app already uses
+    (see sim.api.analyst_view.AnalystMessage's docstring)."""
+
+    role: str  # "user" | "model"
+    text: str
+
+
+class AnalystChatRequest(BaseModel):
+    season_id: int | None = None
+    messages: list[AnalystMessageIn] = Field(default_factory=list)
+
+
+class AnalystCitationOut(BaseModel):
+    """One real numeric fact extracted verbatim from a tool result this
+    turn -- see sim.api.analyst_view.Citation. `percent` is always on a
+    0-100 scale so the frontend can render every citation the same way
+    regardless of which tool it came from."""
+
+    index: int
+    source_tool: str
+    kind: str
+    subject: str
+    percent: float
+    display: str
+
+
+class AnalystSpanOut(BaseModel):
+    """A character range in `reply` where a percentage the model actually
+    wrote was matched (within rounding tolerance) against a real citation's
+    value -- see sim.api.analyst_view.CitationSpan and its module docstring
+    for the exact matching rule. The frontend renders this exact range as a
+    <StatChip> instead of plain text; nothing here is computed client-side."""
+
+    start: int
+    end: int
+    citation_index: int
+
+
+class AnalystToolCallOut(BaseModel):
+    """One real tool invocation made this turn, verbatim -- name, the
+    arguments Gemini supplied, and the real result
+    `sim.api.analyst_tools.TOOL_REGISTRY` returned. Kept in the response so
+    every number in `reply` can be cross-checked against the exact tool
+    call it came from (this is also how this phase's own manual
+    verification step confirms the model's numbers match the real
+    endpoints -- see docs/decisions.md Phase 13)."""
+
+    name: str
+    args: dict[str, Any]
+    result: dict[str, Any]
+
+
+class AnalystChatResponse(BaseModel):
+    league_id: int
+    season_id: int
+    team_id: int
+    team_name: str
+    reply: str
+    citations: list[AnalystCitationOut]
+    spans: list[AnalystSpanOut]
+    tool_calls: list[AnalystToolCallOut]
+
+
+def _to_analyst_chat_response(
+    league_id: int, season_id: int, result: AnalystTurnResult
+) -> AnalystChatResponse:
+    return AnalystChatResponse(
+        league_id=league_id,
+        season_id=season_id,
+        team_id=result.team_id,
+        team_name=result.team_name,
+        reply=result.reply,
+        citations=[
+            AnalystCitationOut(
+                index=c.index,
+                source_tool=c.source_tool,
+                kind=c.kind,
+                subject=c.subject,
+                percent=c.percent,
+                display=c.display,
+            )
+            for c in result.citations
+        ],
+        spans=[
+            AnalystSpanOut(start=s.start, end=s.end, citation_index=s.citation_index)
+            for s in result.spans
+        ],
+        tool_calls=[
+            AnalystToolCallOut(name=t.name, args=t.args, result=t.result) for t in result.tool_calls
+        ],
+    )
+
+
 def _to_power_ranking_roast_response(result: PowerRankingRoastResult) -> PowerRankingRoastResponse:
     return PowerRankingRoastResponse(
         league_id=result.league_id,
@@ -1043,7 +1159,7 @@ def post_whatif(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    computed_at = datetime.now(timezone.utc)
+    computed_at = datetime.now(UTC)
     return _to_response(
         league_id, resolved_season_id, seed, computed_at, serialize_result(result)
     )
@@ -1291,3 +1407,43 @@ def get_power_ranking_roast(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return _to_power_ranking_roast_response(result)
+
+
+@app.post(
+    "/league/{league_id}/analyst/{team_id}",
+    response_model=AnalystChatResponse,
+)
+def post_analyst_chat(
+    league_id: int,
+    team_id: int,
+    req: AnalystChatRequest,
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> AnalystChatResponse:
+    """AI league analyst: a real Gemini tool-calling loop over the six
+    routes above -- see `sim.api.analyst_view` (the loop, citation
+    matching) and `sim.api.analyst_tools` (the six thin tool wrappers, each
+    calling one of this file's other route's own underlying function) for
+    the full methodology. The model interprets and narrates; it never
+    computes anything itself, and every number in `reply` traces back to a
+    real `tool_calls[i].result` field (see `AnalystChatResponse`'s field
+    docs). Scoped to one team (`team_id`), the same URL-driven per-team
+    pattern every phase since Lineup Optimizer (9a) uses -- this app has no
+    auth/league-picker."""
+    try:
+        resolved_season_id = resolve_season_id(conn, league_id, req.season_id)
+    except LeagueNotIngestedError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    history = [AnalystMessage(role=m.role, text=m.text) for m in req.messages]
+    try:
+        result = run_analyst_turn(conn, league_id, resolved_season_id, team_id, history)
+    except LeagueNotIngestedError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except UnknownAnalystTeamError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except _DATA_UNAVAILABLE_ERRORS as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AnalystConfigError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return _to_analyst_chat_response(league_id, resolved_season_id, result)
