@@ -1762,7 +1762,25 @@ nothing here needs undoing when that day comes.
   app bug, the same conclusion reached under the same symptom in three
   prior phases.
 
-## Phase 11 — League History and manager ratings: deferred, not built
+## Phase 11 — League History and manager ratings: REMOVED, not just deferred
+
+**Update:** originally deferred (see below), the project owner subsequently made
+the call explicit: this feature is removed from the plan entirely, not merely
+waiting on data. Asked directly whether the deferred features could be built
+without the missing data, the project owner agreed to that approach for Weekly
+Recap/Weekly Awards (see those phases' sections) but explicitly declined it for
+this one after the distinction was explained -- League History's premise
+(multiple completed seasons to compare across) can't be satisfied the same way
+Weekly Recap's premise (one played week) can. Weekly Recap only needed one
+synthetic week sampled from this league's own real current players and real
+fitted projections. League History would need entire fictional past seasons --
+invented draft classes, invented rosters, for years that never happened -- which
+has no grounding in real data at all. See PLAN.md's "Removed by choice" section
+for the parallel entry there. The original deferral reasoning below still
+explains why this was flagged as blocked in the first place; nothing about that
+changed, only the resolution (removed, not wait-and-revisit).
+
+### Original deferral reasoning (superseded above, kept for context)
 
 Not attempted. Before dispatching this phase, the fixture's
 `status.previousSeasons` field was checked and showed `[2025]`, which read as
