@@ -20,7 +20,7 @@ export function RostersGrid({ teams }: { teams: TeamRoster[] }) {
           {teams.map((team) => (
             <details
               key={team.team_id}
-              className="group rounded-lg border border-border p-3 transition-colors duration-150 open:bg-muted/40 hover:bg-muted/25"
+              className="group rounded-lg border border-border/70 p-3 transition-all duration-150 open:bg-muted/40 hover:bg-primary/5 hover:shadow-[var(--shadow-glow-primary)]"
             >
               <summary className="cursor-pointer list-none font-medium marker:hidden focus-visible:outline-2 focus-visible:outline-ring">
                 <span className="flex items-center justify-between gap-2">
