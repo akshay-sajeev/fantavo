@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
+import numpy.typing as npt
 
 # Tiebreaker weight: wins dominate, points-for breaks ties. Season points-for is
 # bounded well below this, so the composite key sorts correctly.
@@ -150,6 +151,40 @@ def _gamma_shape_scale(mean: np.ndarray, sd: np.ndarray) -> tuple[np.ndarray, np
     return shape, scale
 
 
+def _sample_player_weeks(
+    players: tuple[PlayerParams, ...], n_sims: int, n_weeks: int, rng: np.random.Generator
+) -> npt.NDArray[np.float64]:
+    """Per-player weekly scores for an arbitrary group of players. Returns
+    (n_sims, n_weeks, len(players)) -- the same per-player Gamma(mean, sd) x
+    availability draw `_sample_team_weeks` sums over, exposed here unsummed.
+
+    Factored out of `_sample_team_weeks` (which now just calls this and sums)
+    so a caller that needs individual player scores -- not just a team total
+    -- can reuse the identical sampling primitives instead of duplicating
+    them. E.g. `sim.api.season_replay_view`'s alternate-lineup what-if, which
+    must compare an actual starter's realized weekly score against a bench
+    player's to determine that week's optimal lineup; this is the same
+    engine sampling, applied to a roster slice (starters + bench) instead of
+    only a team's fixed starting lineup, not a second simulation path.
+
+    `players` need not be a real team's `starters` tuple -- the function
+    only reads `mean`/`sd`/`availability` off each `PlayerParams`, so it
+    accepts any ordered group. Refactoring `_sample_team_weeks` to call this
+    makes no change to that function's rng consumption (same two calls, same
+    order), so golden test values are unaffected.
+    """
+    means = np.array([p.mean for p in players], dtype=np.float64)
+    sds = np.array([p.sd for p in players], dtype=np.float64)
+    avail = np.array([p.availability for p in players], dtype=np.float64)
+
+    shape, scale = _gamma_shape_scale(means, sds)
+    size = (n_sims, n_weeks, len(players))
+
+    scores = rng.gamma(shape=shape, scale=scale, size=size)
+    active = rng.random(size) < avail
+    return scores * active
+
+
 def _sample_team_weeks(
     team: TeamParams, n_sims: int, n_weeks: int, rng: np.random.Generator
 ) -> np.ndarray:
@@ -158,16 +193,7 @@ def _sample_team_weeks(
     Vectorized across sims, weeks and players simultaneously -- there is no
     per-simulation loop anywhere in this module.
     """
-    means = np.array([p.mean for p in team.starters], dtype=np.float64)
-    sds = np.array([p.sd for p in team.starters], dtype=np.float64)
-    avail = np.array([p.availability for p in team.starters], dtype=np.float64)
-
-    shape, scale = _gamma_shape_scale(means, sds)
-    size = (n_sims, n_weeks, len(team.starters))
-
-    scores = rng.gamma(shape=shape, scale=scale, size=size)
-    active = rng.random(size) < avail
-    return (scores * active).sum(axis=2)
+    return _sample_player_weeks(team.starters, n_sims, n_weeks, rng).sum(axis=2)
 
 
 def _next_power_of_two(n: int) -> int:

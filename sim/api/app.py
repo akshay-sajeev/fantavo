@@ -49,6 +49,7 @@ from sim.api.params_loader import LeagueNotIngestedError, load_league, resolve_s
 from sim.api.roster_view import RosterPlayer, TeamRosterView, load_team_rosters
 from sim.api.schedule_view import ScheduledMatchup, load_schedule
 from sim.api.scheduler import start_scheduler
+from sim.api.season_replay_view import TeamSeasonReplay, compute_season_replay
 from sim.api.seeds import draw_whatif_seed
 from sim.engine import PlayerParams, simulate_seasons
 from sim.params.errors import ParamsError
@@ -156,6 +157,52 @@ class ScheduleResponse(BaseModel):
     weeks: list[list[ScheduledMatchupOut]]
 
 
+class SeasonReplayRequest(BaseModel):
+    season_id: int | None = None
+    # Same explicit-or-drawn seeding convention as WhatIfRequest.seed (see
+    # sim.api.seeds) -- pass one back to reproduce an earlier replay exactly.
+    seed: int | None = None
+
+
+class SeasonReplayTeamOut(BaseModel):
+    team_id: int
+    team_name: str
+    actual_wins: int
+    actual_losses: int
+    actual_ties: int
+    optimal_wins: int
+    optimal_losses: int
+    optimal_ties: int
+    actual_points_for: float
+    optimal_points_for: float
+    neutral_expected_wins: float
+    neutral_expected_losses: float
+    neutral_expected_ties: float
+
+
+# CLAUDE.md's "no invented numbers" rule squarely applies to this note: this
+# whole response is one sampled realization standing in for "what actually
+# happened," not a real result -- see sim.api.season_replay_view's module
+# docstring and docs/decisions.md Phase 6 for the full resolution.
+_SEASON_REPLAY_NOTE = (
+    "SYNTHETIC simulated season, not real results. No real weekly scores have "
+    "been ingested for this league yet, so this replay uses one sampled "
+    "realization drawn from the same fitted per-player scoring model "
+    "simulate_seasons() uses everywhere else, purely to exercise the "
+    "alternate-lineup and schedule-neutrality what-ifs end-to-end."
+)
+
+
+class SeasonReplayResponse(BaseModel):
+    league_id: int
+    season_id: int
+    n_regular_weeks: int
+    seed: int
+    synthetic_actual_scores: bool = True
+    note: str = _SEASON_REPLAY_NOTE
+    teams: list[SeasonReplayTeamOut]
+
+
 def _to_roster_player_out(player: RosterPlayer) -> RosterPlayerOut:
     return RosterPlayerOut(
         player_id=player.player_id,
@@ -190,6 +237,24 @@ def _to_matchup_out(matchup: ScheduledMatchup) -> ScheduledMatchupOut:
         away_team_id=matchup.away_team_id,
         away_team_name=matchup.away_team_name,
         winner=matchup.winner,
+    )
+
+
+def _to_season_replay_team_out(team: TeamSeasonReplay) -> SeasonReplayTeamOut:
+    return SeasonReplayTeamOut(
+        team_id=team.team_id,
+        team_name=team.team_name,
+        actual_wins=team.actual_wins,
+        actual_losses=team.actual_losses,
+        actual_ties=team.actual_ties,
+        optimal_wins=team.optimal_wins,
+        optimal_losses=team.optimal_losses,
+        optimal_ties=team.optimal_ties,
+        actual_points_for=team.actual_points_for,
+        optimal_points_for=team.optimal_points_for,
+        neutral_expected_wins=team.neutral_expected_wins,
+        neutral_expected_losses=team.neutral_expected_losses,
+        neutral_expected_ties=team.neutral_expected_ties,
     )
 
 
@@ -355,4 +420,35 @@ def get_schedule(
         n_regular_weeks=schedule.n_regular_weeks,
         current_week=schedule.current_week,
         weeks=[[_to_matchup_out(m) for m in week] for week in schedule.weeks],
+    )
+
+
+@app.post("/league/{league_id}/whatif/season-replay", response_model=SeasonReplayResponse)
+def post_season_replay(
+    league_id: int,
+    req: SeasonReplayRequest,
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> SeasonReplayResponse:
+    """Alternate-lineup and schedule-neutrality what-ifs -- see
+    sim.api.season_replay_view's module docstring for what "actual" means
+    here (one sampled realization, clearly labeled, never a real result).
+    """
+    try:
+        resolved_season_id = resolve_season_id(conn, league_id, req.season_id)
+    except LeagueNotIngestedError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    seed = req.seed if req.seed is not None else draw_whatif_seed()
+    rng = np.random.default_rng(seed)
+    try:
+        result = compute_season_replay(conn, league_id, resolved_season_id, rng=rng)
+    except _DATA_UNAVAILABLE_ERRORS as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return SeasonReplayResponse(
+        league_id=league_id,
+        season_id=resolved_season_id,
+        n_regular_weeks=result.n_regular_weeks,
+        seed=seed,
+        teams=[_to_season_replay_team_out(t) for t in result.teams],
     )

@@ -829,3 +829,75 @@ One line per non-obvious choice and why. Appended at the end of each phase.
   render correctly; confirmed no page-level horizontal scroll at 375px via
   `document.documentElement.scrollWidth`; confirmed the 404/error path
   renders a readable message for an un-ingested league id.
+
+## Phase 6 — What-if and trades
+
+- **Trade and Roster swap needed nothing new backend-wise.** Both route
+  through the existing `POST /league/{id}/whatif` endpoint (Phase 4) with
+  different `roster_overrides` — the plan's own framing ("same engine with
+  different inputs") held exactly. All the new backend work this phase went
+  into Alternate lineup and Schedule neutrality instead.
+- **Alternate lineup and Schedule neutrality hit the pre-draft blocker in a
+  new, sharper form, and were resolved accordingly.** Both need per-week
+  *actual* scores; `matchup` stores only a decidedness flag and a raw JSONB
+  blob, and neither the real league (still pre-draft) nor the SYNTHETIC
+  validation league (mock-drafted, never mock-*played*) has any actual
+  weekly scoring data anywhere. Resolution: one sampled "actual" season is
+  drawn from the exact same fitted Gamma(mean, sd) × availability model
+  `simulate_seasons()` already uses, via `sim.engine._sample_player_weeks`
+  — the literal internal helper the engine calls, not a second sampling
+  implementation. This is explicitly a *different, stronger* category of
+  fabrication than a synthetic roster grouping (it invents "what happened,"
+  not just "who's on the team") — flagged as such rather than silently
+  applying the same precedent, and proceeded on the reasoning that a single
+  real draw from the real fitted model, clearly and permanently labeled
+  (`SeasonReplayResponse.note`, `synthetic_actual_scores: true`), is still a
+  real computation rather than an invented number. Every response surface
+  this touches says "SYNTHETIC simulated season, not real results" — never
+  presented as, or mistakable for, a played game.
+- **`_sample_team_weeks` refactored into `_sample_player_weeks` +
+  `.sum(axis=2)`, not duplicated.** The season-replay module needs
+  individual player scores (to compare a bench player's realized week
+  against a starter's), not just each team's already-summed total. Same RNG
+  consumption order as before the refactor (same two `rng` calls, same
+  sequence), so `sim/tests/test_engine.py`'s golden values are provably
+  unaffected — verified by running the golden tests, not just asserted.
+- **"Optimal lineup" solved exactly via `scipy.optimize.linear_sum_assignment`
+  (Hungarian algorithm)** over a player × slot-instance cost matrix, with
+  flex eligibility read from each player's real `eligibleSlots`
+  (CLAUDE.md's rule, not inferred from position) — not a hand-rolled
+  greedy/position-based heuristic that could silently pick a wrong lineup
+  in an edge case. Deterministic combinatorial optimization over
+  already-sampled numbers; the only randomness in the whole module is the
+  one `_sample_player_weeks` call, so this isn't a second simulation path.
+- **Schedule neutrality is a pure permutation/broadcast comparison** over
+  the same per-team weekly score array Alternate-lineup already computed —
+  no new sampling, no per-simulation Python loop, matching PLAN.md's "a
+  permutation over existing weekly score arrays, not a new simulation"
+  instruction literally.
+- **Trade builder's before/after comparison reuses the same seed for both
+  runs**, so the reported title/playoff-odds delta reflects only the roster
+  change, not independent sampling noise between two separate live
+  `simulate_seasons()` calls — stated explicitly in the UI copy so the
+  number's meaning is legible, not just correct.
+- **Verification**: `pytest -q` 124 passed (Phase 5b's 118 + 6 new), `mypy
+  --strict sim ingest` 21 pre-existing errors (0 new), `ruff check sim
+  ingest db scripts` pre-existing findings only (0 new — none touch any
+  Phase 6 file). Web: `tsc --noEmit`, `eslint .`, and `npm run build`
+  (production) all clean. Visually verified in a real browser (uvicorn +
+  Next dev server, both against `league_id=-1990001`) at desktop and
+  375px mobile: ran a live trade (Puka Nacua for Ja'Marr Chase) and
+  confirmed both teams' title/playoff odds and finish distributions
+  updated with the asymmetric-impact headline rendered plainly, not buried
+  in a table; ran a live season replay and confirmed actual/optimal/
+  schedule-neutral records rendered with the SYNTHETIC labeling visible;
+  confirmed the roster-swap tab renders correctly; confirmed no
+  page-level horizontal scroll at 375px.
+- **Recovery note**: the agent that did this phase's implementation work
+  hit a background session-limit failure after all code was written and
+  tests were passing locally, but before verification/commit/push
+  completed. The coordinating session verified the already-written work
+  directly (tests, mypy, ruff, tsc, eslint, production build, live browser
+  check against the real running stack) rather than re-doing it, found no
+  issues, and completed the commit/push/decisions-log steps this section
+  itself documents.

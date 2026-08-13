@@ -70,3 +70,53 @@ export interface ScheduleResponse {
   current_week: number | null;
   weeks: ScheduledMatchup[][];
 }
+
+/** Body shape for POST /league/{id}/whatif -- mirrors sim.api.app.WhatIfRequest
+ * field-for-field. `roster_overrides` maps team_id -> the full ordered list
+ * of player_ids to use as that team's new starters; a team omitted from the
+ * map keeps its real ingested roster. */
+export interface WhatIfRequestBody {
+  season_id?: number;
+  roster_overrides: Record<number, number[]>;
+  n_sims?: number;
+  seed?: number;
+}
+
+/** Result of POST /api/league/{id}/whatif-compare (a Next.js route handler,
+ * not the sim API directly) -- two whatif calls against the same seed, one
+ * with no overrides (the baseline) and one with the scenario's overrides,
+ * so "before" and "after" are directly comparable (common random numbers). */
+export interface WhatIfCompareResponse {
+  seed: number;
+  before: SimulationResponse;
+  after: SimulationResponse;
+}
+
+export interface SeasonReplayTeam {
+  team_id: number;
+  team_name: string;
+  actual_wins: number;
+  actual_losses: number;
+  actual_ties: number;
+  optimal_wins: number;
+  optimal_losses: number;
+  optimal_ties: number;
+  actual_points_for: number;
+  optimal_points_for: number;
+  neutral_expected_wins: number;
+  neutral_expected_losses: number;
+  neutral_expected_ties: number;
+}
+
+/** Mirrors sim.api.app.SeasonReplayResponse. `note`/`synthetic_actual_scores`
+ * are always present and must be surfaced wherever this data renders -- see
+ * that response model's docstring and docs/decisions.md Phase 6. */
+export interface SeasonReplayResponse {
+  league_id: number;
+  season_id: number;
+  n_regular_weeks: number;
+  seed: number;
+  synthetic_actual_scores: boolean;
+  note: string;
+  teams: SeasonReplayTeam[];
+}

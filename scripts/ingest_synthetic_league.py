@@ -38,7 +38,9 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ingest.db import DEFAULT_DEV_DSN, connect, dsn_from_env, ingest_league, run_migrations
+from ingest.models import PlayerProjection
 from ingest.parse import FIXTURES_DIR, load_fixture, parse_player_pool, parse_scoring_table
+from ingest.slots import BENCH_SLOT_ID
 from sim.engine import round_robin_schedule
 from sim.params.mock_rosters import draft_mock_rosters
 
@@ -53,6 +55,43 @@ N_MOCK_TEAMS = 10
 _MOCK_TEAM_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
+def _draft_bench_entries(
+    player_pool: tuple[PlayerProjection, ...],
+    drafted_ids: set[int],
+    n_mock_teams: int,
+    n_bench_slots: int,
+) -> list[list[tuple[int, int]]]:
+    """Fill each mock team's bench (any position, `BENCH_SLOT_ID`) with the
+    same best-remaining-player snake draft `sim.params.mock_rosters` already
+    uses for starters -- extends that project-owner-approved fabrication
+    category (real players, real projections; only the team grouping is
+    fictional) to bench depth, kept local to this script rather than added
+    to `sim.params.mock_rosters.draft_mock_rosters` so Phase 2's
+    starters-only `build_mock_league` path is completely unaffected (see
+    docs/decisions.md Phase 6).
+
+    Bench slots have no position requirement in ESPN's model (unlike a
+    starting slot, `eligibleSlots` membership is irrelevant to sitting on the
+    bench), so this is a plain best-remaining pick each round, not a
+    positional draft. Needed so Alternate-lineup's optimal-vs-actual
+    comparison has real bench players to ever swap in -- with zero bench
+    depth (this script's pre-Phase-6 behavior) the optimal lineup is
+    mechanically always identical to the actual one, which would make that
+    what-if type undemonstrable.
+    """
+    benches: list[list[tuple[int, int]]] = [[] for _ in range(n_mock_teams)]
+    for round_index in range(n_bench_slots):
+        order = range(n_mock_teams) if round_index % 2 == 0 else range(n_mock_teams - 1, -1, -1)
+        for team_index in order:
+            candidates = [p for p in player_pool if p.player_id not in drafted_ids]
+            if not candidates:
+                return benches
+            best = max(candidates, key=lambda p: p.mean_points_per_game)
+            drafted_ids.add(best.player_id)
+            benches[team_index].append((best.player_id, BENCH_SLOT_ID))
+    return benches
+
+
 def build_synthetic_raw_payload(raw: dict[str, Any]) -> dict[str, Any]:
     """A raw-ESPN-shaped payload for a fabricated 10-team league, built from
     `raw`'s real settings and real player pool. Ingestible through
@@ -62,6 +101,15 @@ def build_synthetic_raw_payload(raw: dict[str, Any]) -> dict[str, Any]:
     player_pool, _skipped = parse_player_pool(raw, scoring_table)
 
     rosters = draft_mock_rosters(raw, player_pool, n_mock_teams=N_MOCK_TEAMS)
+
+    # Bench depth, read from this league's own real rosterSettings rather
+    # than hardcoded (settings.rosterSettings.lineupSlotCounts["20"] is 7 in
+    # fixtures/league_raw_2026.json) -- see _draft_bench_entries.
+    drafted_ids = {player_id for roster in rosters for player_id, _slot_id in roster}
+    n_bench_slots = int(
+        raw["settings"]["rosterSettings"]["lineupSlotCounts"].get(str(BENCH_SLOT_ID), 0)
+    )
+    benches = _draft_bench_entries(player_pool, drafted_ids, N_MOCK_TEAMS, n_bench_slots)
 
     schedule_settings = raw["settings"]["scheduleSettings"]
     n_regular_weeks = schedule_settings["matchupPeriodCount"]
@@ -75,7 +123,7 @@ def build_synthetic_raw_payload(raw: dict[str, Any]) -> dict[str, Any]:
             "roster": {
                 "entries": [
                     {"playerId": player_id, "lineupSlotId": lineup_slot_id}
-                    for player_id, lineup_slot_id in roster
+                    for player_id, lineup_slot_id in (*roster, *benches[team_index])
                 ]
             },
         }

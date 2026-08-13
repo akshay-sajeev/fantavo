@@ -89,18 +89,23 @@ def test_team_risk_rating_is_zero_when_every_starter_is_fully_available(
             assert team.risk_rating == 0.0
 
 
-def test_positional_concentration_flags_positions_with_zero_bench_depth(
+def test_positional_concentration_flags_only_positions_with_zero_bench_depth(
     pg_conn: psycopg.Connection[Any], synthetic_league_id: int, raw_fixture: dict[str, Any]
 ) -> None:
+    """Since Phase 6, `scripts/ingest_synthetic_league.py` also drafts real
+    bench players (see docs/decisions.md) -- so this no longer flags every
+    starting position for every team. Assert the formula's actual
+    documented rule (flag a starting position iff zero same-position bench
+    players) against whatever bench composition this run's random-but-
+    deterministic-per-test-seed draft happened to produce, rather than a
+    fixed hand-computed set.
+    """
     season_id = raw_fixture["seasonId"]
     rosters = load_team_rosters(pg_conn, synthetic_league_id, season_id)
-    # The mock draft (sim/params/mock_rosters.py) only fills starting slots,
-    # so every synthetic team has zero bench players -- every starting
-    # position should be flagged for every team, a real (documented)
-    # property of this fixture, not a bug in the formula.
+    assert any(team.bench for team in rosters)  # bench depth now genuinely exists
     for team in rosters:
-        assert not team.bench
         starter_positions = {p.position for p in team.starters}
+        bench_positions = {p.position for p in team.bench}
         assert set(team.positional_concentration) == {
-            f"No bench depth at {pos}" for pos in starter_positions
+            f"No bench depth at {pos}" for pos in starter_positions if pos not in bench_positions
         }

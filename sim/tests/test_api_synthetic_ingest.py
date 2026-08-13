@@ -15,7 +15,7 @@ from ingest.parse import (
     parse_scoring_table,
     parse_teams,
 )
-from ingest.slots import NON_STARTING_SLOTS
+from ingest.slots import BENCH_SLOT_ID, NON_STARTING_SLOTS
 from scripts.ingest_synthetic_league import (
     N_MOCK_TEAMS,
     SYNTHETIC_LEAGUE_ID,
@@ -30,6 +30,15 @@ from sim.params.variance import fit_position_cv
 def test_synthetic_payload_has_the_expected_shape(raw_fixture: dict[str, Any]) -> None:
     payload = build_synthetic_raw_payload(raw_fixture)
 
+    # Real bench count from this league's own rosterSettings (7 in
+    # fixtures/league_raw_2026.json) -- Phase 6 added bench depth to the
+    # synthetic roster (see docs/decisions.md) so Alternate-lineup has real
+    # bench players to ever swap in; a starters-only roster made that
+    # what-if type mechanically trivial (optimal always == actual).
+    expected_bench = int(
+        raw_fixture["settings"]["rosterSettings"]["lineupSlotCounts"].get(str(BENCH_SLOT_ID), 0)
+    )
+
     assert payload["id"] == SYNTHETIC_LEAGUE_ID
     assert payload["id"] < 0  # unmistakable: no real ESPN league id is negative
     assert payload["seasonId"] == raw_fixture["seasonId"]
@@ -38,9 +47,12 @@ def test_synthetic_payload_has_the_expected_shape(raw_fixture: dict[str, Any]) -
     for team in payload["teams"]:
         assert "SYNTHETIC" in team["name"]
         entries = team["roster"]["entries"]
-        assert len(entries) == 9  # QB, RB, RB, WR, WR, TE, FLEX, D/ST, K
-        for entry in entries:
-            assert entry["lineupSlotId"] not in NON_STARTING_SLOTS
+        assert len(entries) == 9 + expected_bench  # QB,RB,RB,WR,WR,TE,FLEX,D/ST,K + bench
+        starting_entries = [e for e in entries if e["lineupSlotId"] not in NON_STARTING_SLOTS]
+        bench_entries = [e for e in entries if e["lineupSlotId"] in NON_STARTING_SLOTS]
+        assert len(starting_entries) == 9
+        assert len(bench_entries) == expected_bench
+        assert all(e["lineupSlotId"] == BENCH_SLOT_ID for e in bench_entries)
 
 
 def test_synthetic_payload_drafts_no_player_twice(raw_fixture: dict[str, Any]) -> None:

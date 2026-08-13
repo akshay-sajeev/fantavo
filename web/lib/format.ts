@@ -6,6 +6,13 @@ export function formatPercent(fraction: number, digits = 1): string {
   return `${(fraction * 100).toFixed(digits)}%`;
 }
 
+/** A signed delta already expressed in percentage points (e.g. +4.2, -1.3) --
+ * for what-if before/after comparisons, where the sign itself is the point. */
+export function formatSignedPoints(points: number, digits = 1): string {
+  const sign = points >= 0 ? "+" : "";
+  return `${sign}${points.toFixed(digits)} pts`;
+}
+
 export function formatPoints(points: number, digits = 1): string {
   return points.toFixed(digits);
 }

@@ -11,6 +11,7 @@ export function LeagueNav({ leagueId }: { leagueId: number }) {
     { href: base, label: "Overview" },
     { href: `${base}/power-rankings`, label: "Power Rankings" },
     { href: `${base}/risk`, label: "Roster Risk" },
+    { href: `${base}/whatif`, label: "What-If" },
   ];
 
   return (

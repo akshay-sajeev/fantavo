@@ -1,5 +1,11 @@
 import "server-only";
-import type { RosterResponse, ScheduleResponse, SimulationResponse } from "@/lib/types";
+import type {
+  RosterResponse,
+  ScheduleResponse,
+  SeasonReplayResponse,
+  SimulationResponse,
+  WhatIfRequestBody,
+} from "@/lib/types";
 
 /**
  * Thin fetch wrapper against sim/api/app.py -- this is the ONLY place the
@@ -61,6 +67,38 @@ async function getJson<T>(
   return (await res.json()) as T;
 }
 
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const url = new URL(path, API_BASE);
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+  } catch (cause) {
+    throw new ApiError(
+      0,
+      `could not reach the sim API at ${API_BASE} -- is uvicorn running? (${String(cause)})`,
+    );
+  }
+
+  if (!res.ok) {
+    const responseBody = await res.text().catch(() => "");
+    let detail = responseBody;
+    try {
+      const parsed = JSON.parse(responseBody) as { detail?: unknown };
+      if (typeof parsed.detail === "string") detail = parsed.detail;
+    } catch {
+      // not JSON -- fall through and use the raw body text
+    }
+    throw new ApiError(res.status, detail || res.statusText);
+  }
+  return (await res.json()) as T;
+}
+
 export function getSimulation(
   leagueId: number,
   seasonId?: number,
@@ -76,4 +114,26 @@ export function getRoster(leagueId: number, seasonId?: number): Promise<RosterRe
 
 export function getSchedule(leagueId: number, seasonId?: number): Promise<ScheduleResponse> {
   return getJson<ScheduleResponse>(`/league/${leagueId}/schedule`, { season_id: seasonId });
+}
+
+/**
+ * POST /league/{id}/whatif -- live, n_sims defaults to the API's own
+ * LIVE_WHATIF_N_SIMS (2000) when omitted. Used twice per scenario by
+ * app/api/league/[leagueId]/whatif-compare/route.ts (a baseline call with
+ * empty roster_overrides and a scenario call), sharing one seed so the two
+ * results are directly comparable (common random numbers) -- never called
+ * directly from a client component, per this file's server-only contract.
+ */
+export function postWhatif(leagueId: number, body: WhatIfRequestBody): Promise<SimulationResponse> {
+  return postJson<SimulationResponse>(`/league/${leagueId}/whatif`, body);
+}
+
+/** POST /league/{id}/whatif/season-replay -- see sim.api.season_replay_view
+ * and sim.api.app.SeasonReplayResponse for what this data means (one
+ * sampled SYNTHETIC "actual" season, never real results). */
+export function postSeasonReplay(
+  leagueId: number,
+  body: { season_id?: number; seed?: number },
+): Promise<SeasonReplayResponse> {
+  return postJson<SeasonReplayResponse>(`/league/${leagueId}/whatif/season-replay`, body);
 }
