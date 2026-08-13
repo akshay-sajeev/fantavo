@@ -2217,3 +2217,86 @@ sub-feature; nothing needs undoing when that day comes.
   A real, external Gemini-side 503 "high demand" period on `gemini-flash-latest` was also observed
   live during this same window (see the model-choice note above) -- not a tooling artifact, a real
   transient upstream condition, worked around by the model switch rather than by retrying blindly.
+
+## Phase 14 — Dark Glass Makeover (foundation + dashboard)
+
+- **Deliberate, approved reversal of Phase 5a's light-theme palette, not an
+  oversight.** The project owner requested a dark, glassmorphic/neumorphic,
+  glowing, motion-heavy theme referencing a soccer-club-management dashboard
+  and a live-sports betting dashboard. That directly conflicts with
+  `design-system/MASTER.md`'s original, reviewed-and-approved dials (light
+  only, Motion 3/10 "Subtle", "Ornate design" explicitly listed as an
+  anti-pattern). Rather than silently overwrite an approved decision, this
+  was brainstormed, written up as
+  `docs/superpowers/specs/2026-08-13-dark-glass-makeover-design.md`, and
+  explicitly approved before implementation — the project owner chose
+  Option A ("supersede MASTER.md") over keeping a light/dark toggle or
+  skipping the docs update.
+- **Brand accent corrected from yellow to neon green (`#39FF14`) mid-review**,
+  before implementation started — the spec's first draft used `#D7FF3F`
+  (yellow), the project owner asked for green specifically. `TEAM_CHART_COLORS`
+  and every brand-accent CSS comment were updated to match; no yellow value
+  shipped anywhere.
+- **Pushed the change down into design tokens and shared `components/ui/*`
+  primitives first**, rather than touching all 11 pages at once. Every page
+  that already composes `Card`/`Button`/`Badge`/`Table`/`Tabs`/`Tooltip`
+  inherits the new dark-glass look automatically from `globals.css`'s new
+  `:root` values — confirmed by reading `badge.tsx`, `tabs.tsx`,
+  `tooltip.tsx`, `separator.tsx`, and `skeleton.tsx` before deciding none of
+  them needed code changes (they reference semantic tokens like `bg-muted`,
+  `text-foreground`, `bg-primary` already). Only `Card` (glass blur), `Button`
+  (glow shadow + new `accent` variant), and `Table` (glow row hover) needed
+  actual className edits.
+- **Scope explicitly limited to the shared foundation plus one full
+  reference page** (the league dashboard) rather than all 11 pages, per the
+  spec's own non-goals. The other 10 pages (`power-rankings`, `risk`,
+  `whatif`, `draft`, `playoffs`, `lineup-optimizer`, `waivers`,
+  `beat-my-league`, `roast`, `analyst`) get the token/primitive changes for
+  free but no page-specific motion work yet — that's fast-follow work once
+  this foundation is confirmed working, not invented ahead of time.
+- **`chart.tsx`'s SVG glow-filter technique (called out in the spec) was
+  deferred rather than built speculatively.** No page in this phase's scope
+  renders a chart (the dashboard has none), so implementing it now would
+  mean shipping code with zero consumers and no way to visually verify it
+  actually works — deferred to the phase that retthemes `power-rankings`
+  (the first chart-consuming page), where it can be built and verified
+  against a real chart. `lib/chart-colors.ts`'s palette was still updated now
+  since it's a trivial, low-risk constant change independent of the filter
+  work.
+- **`StandingsTable` and `CurrentMatchupCard` became Client Components**
+  (`"use client"`) to use Framer Motion (`motion.tbody`/`motion.tr`,
+  `useReducedMotion`, `TiltCard`). Both are still rendered from
+  `app/league/[leagueId]/page.tsx`, a Server Component, with plain
+  serializable props (`simulation`, `schedule`) — a standard Next.js
+  Server-Component-renders-Client-Component-children pattern, not a
+  page-level `"use client"` conversion. `StandingsTable`'s sort/tally logic
+  (`mean_wins` ordering, `tallyActualRecords`) was already pure
+  presentational sorting of API-supplied values before this phase; moving
+  where it executes (client instead of server) doesn't add new analytics
+  logic, and the values themselves are untouched.
+- **`AnimatedMeter` is additive, never a replacement for the formatted
+  percentage text** — `StandingsTable`'s Playoff %/Title % cells still
+  render `formatPercent(...)` exactly as before, with the meter rendered
+  alongside it, animating the same already-computed API value (never
+  re-derived, never rounded differently).
+- **Every new text/background color pairing was checked against WCAG 4.5:1
+  before being chosen** (documented in the spec and in
+  `web/app/globals.css`'s new `:root` comment): foreground-on-background
+  ~16:1, muted-foreground-on-background ~6.3:1, primary-foreground-on-primary
+  ~5.2:1 (which is why primary is `#2563EB`, not the brighter `#3B82F6` used
+  for glow/ring purposes only), destructive-on-background ~7:1,
+  brand-accent-foreground-on-brand-accent ~15.5:1 (dark text only —
+  white-on-`#39FF14` measures ~1.4:1 and was rejected).
+- **Verification**: `cd web && npx tsc --noEmit`, `npx eslint .`, and
+  `npm run build` (production) all clean after every task. `/web` has no
+  vitest/unit-test harness configured today (despite `CLAUDE.md`'s general
+  mention of one — not actually wired up for `/web` in this repo), matching
+  every prior phase's own verification approach for this directory.
+  Visually verified in a real browser (Next dev server) at desktop and 375px
+  mobile widths: dark palette renders correctly, `Card`/`Button`/`Table`
+  glow/glass treatments show and don't shift layout, the sidebar icon rail
+  is keyboard-navigable with visible focus and working tooltips, the
+  dashboard's four cards stagger in on load and its standings meters animate
+  from 0 to their real values, `prefers-reduced-motion` disables all of the
+  above (instant, static rendering), and no page-level horizontal scroll at
+  375px.

@@ -9,7 +9,15 @@
 **Project:** Fantavo
 **Generated:** 2026-08-12 17:39:53
 **Category:** Analytics Dashboard
-**Design Dials:** Variance 4/10 (Balanced / Modern) | Motion 3/10 (Subtle) | Density 8/10 (Dense / Dashboard)
+**Design Dials:** Variance 4/10 (Balanced / Modern) | Motion 7/10 (Expressive) | Density 8/10 (Dense / Dashboard)
+
+> **Revised 2026-08-13 (Dark Glass Makeover):** the palette, motion dial, and
+> anti-patterns below were updated in place to match
+> `docs/superpowers/specs/2026-08-13-dark-glass-makeover-design.md` (approved
+> by the project owner) and `docs/decisions.md`'s Phase 14 entry, which
+> supersedes this file's original Phase 5a light-theme values. The
+> Typography, Spacing, Chart Recommendations, and GSAP scroll-reveal sections
+> below are unchanged from Phase 5a.
 
 ---
 
@@ -19,18 +27,22 @@
 
 | Role | Hex | CSS Variable |
 |------|-----|--------------|
-| Primary | `#1E40AF` | `--color-primary` |
-| On Primary | `#FFFFFF` | `--color-on-primary` |
+| Primary | `#2563EB` | `--color-primary` |
+| On Primary | `#F8FAFC` | `--color-on-primary` |
 | Secondary | `#3B82F6` | `--color-secondary` |
-| Accent/CTA | `#D97706` | `--color-accent` |
-| Background | `#F8FAFC` | `--color-background` |
-| Foreground | `#1E3A8A` | `--color-foreground` |
-| Muted | `#E9EEF6` | `--color-muted` |
-| Border | `#DBEAFE` | `--color-border` |
-| Destructive | `#DC2626` | `--color-destructive` |
-| Ring | `#1E40AF` | `--color-ring` |
+| Accent/CTA | `#39FF14` | `--color-accent` |
+| Background | `#090D16` | `--color-background` |
+| Foreground | `#E7ECF6` | `--color-foreground` |
+| Muted | `#141B2E` | `--color-muted` |
+| Border | `#1E293B` | `--color-border` |
+| Destructive | `#F87171` | `--color-destructive` |
+| Ring | `#60A5FA` | `--color-ring` |
 
-**Color Notes:** Blue data + amber highlights [Accent adjusted from #F59E0B for WCAG 3:1]
+**Color Notes:** Dark obsidian base, glass/translucent surfaces, glow-blue
+primary + neon-green accent (rare, high-signal use only). `#39FF14` requires
+dark text (`#0B1220`), never white — see
+`docs/superpowers/specs/2026-08-13-dark-glass-makeover-design.md`'s contrast
+notes.
 
 ### Typography
 
@@ -74,30 +86,31 @@
 ### Buttons
 
 ```css
-/* Primary Button */
+/* Primary Button -- glow-blue, the default action color */
 .btn-primary {
-  background: #D97706;
-  color: white;
+  background: #2563EB;
+  color: #F8FAFC;
   padding: 12px 24px;
   border-radius: 8px;
   font-weight: 600;
+  box-shadow: 0 0 16px 0 rgba(59, 130, 246, 0.35);
   transition: all 200ms ease;
   cursor: pointer;
 }
 
 .btn-primary:hover {
-  opacity: 0.9;
-  transform: translateY(-1px);
+  background: color-mix(in oklch, #2563EB, white 10%);
+  box-shadow: 0 0 28px 2px rgba(59, 130, 246, 0.5);
 }
 
-/* Secondary Button */
-.btn-secondary {
-  background: transparent;
-  color: #1E40AF;
-  border: 2px solid #1E40AF;
+/* Accent Button -- neon green, rare/high-signal CTAs only */
+.btn-accent {
+  background: #39FF14;
+  color: #0B1220;
   padding: 12px 24px;
   border-radius: 8px;
   font-weight: 600;
+  box-shadow: 0 0 16px 0 rgba(57, 255, 20, 0.3);
   transition: all 200ms ease;
   cursor: pointer;
 }
@@ -106,8 +119,10 @@
 ### Cards
 
 ```css
+/* Glass surface: translucent + blurred over the obsidian background */
 .card {
-  background: #F8FAFC;
+  background: rgba(15, 21, 36, 0.7);
+  backdrop-filter: blur(12px);
   border-radius: 12px;
   padding: 24px;
   box-shadow: var(--shadow-md);
@@ -116,7 +131,7 @@
 }
 
 .card:hover {
-  box-shadow: var(--shadow-lg);
+  box-shadow: 0 0 16px 0 rgba(59, 130, 246, 0.35);
   transform: translateY(-2px);
 }
 ```
@@ -259,7 +274,6 @@ gsap.from(el, { opacity: 0, y: 12, duration: 0.35, ease: 'power1.out', scrollTri
 
 ## Anti-Patterns (Do NOT Use)
 
-- ❌ Ornate design
 - ❌ No filtering
 
 ### Additional Forbidden Patterns
