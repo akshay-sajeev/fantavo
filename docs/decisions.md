@@ -1315,3 +1315,113 @@ trigger before real drafted rosters existed anywhere in this codebase.
   and seeding table render correct real data; zero console errors either way. Treated as the same
   screenshot-capture tool artifact flagged before this phase started, not an app bug -- verified via
   DOM content directly rather than assumed.
+
+## Phase 9a — Lineup optimizer
+
+*Covers Phase 9's "Lineup optimizer" sub-feature (feature 10) only -- Waiver intelligence and Weekly
+recap are separate future sessions, per PLAN.md's "three separate sessions" instruction.*
+
+- **Season-long-override framing, argued explicitly rather than silently assumed.** Read
+  `sim/engine.py` line by line before writing any code to confirm `simulate_seasons()`'s
+  `roster_overrides` replaces a team's `starters` for the entire simulated season -- a team's
+  `TeamParams` is rebuilt once per call and `_sample_team_weeks` samples every `n_weeks + n_rounds`
+  column from that one fixed tuple; there is no per-week lineup mechanism anywhere in the engine (its
+  own module docstring says so: "v1 models a fixed starting lineup per team for the whole season...
+  a deliberate simplification, not an oversight"). Framing "safest"/"highest upside" as season-long
+  choices is therefore not a shortcut this phase took -- it is the only framing the engine can express
+  today. It also happens to match this league's actual state: every matchup for league_id=885686492 is
+  still `UNDECIDED` (repeated across Phases 5-8), so there is currently no real distinction between
+  "this week" and "the rest of the season" to collapse. Documented in `sim/api/lineup_optimizer_view.py`'s
+  module docstring, and surfaced directly in the UI (`components/lineup/framing-note.tsx`), not just
+  here, that this will need revisiting once real weeks are played -- a future phase's territory.
+- **Floor computed from real Monte Carlo samples of the team TOTAL, never a sum of individual player
+  floors.** The 10th percentile of a sum of independent random variables is not the sum of their
+  individual 10th percentiles -- summing floors overstates real downside risk by implicitly assuming
+  every player has a bad week simultaneously. `_weekly_totals` draws
+  `sim.engine._sample_player_weeks(candidate_starters, n_sims=20,000, n_weeks=1, rng)` (the literal
+  per-player sampling primitive `simulate_seasons()` itself calls) and sums across players *before*
+  taking any percentile. No second sampling implementation anywhere -- same reuse pattern
+  `sim.api.season_replay_view` and `sim.api.playoff_planner_view` already established for this exact
+  primitive.
+- **Search space: the current lineup plus every single-slot swap, not a full permutation.** Measured
+  directly against the real league before writing the search: the full Cartesian product of legal
+  per-slot-instance fillers (9 starting slots: 1 QB/2 RB/2 WR/1 TE/1 FLEX/1 D-ST/1 K, 6-7 bench players
+  per team) ranges from ~1,300 to ~4,000 candidate lineups per team -- intractable to re-run
+  `simulate_seasons()` against for the highest-upside search. Every single-slot swap (one starting-slot
+  instance's occupant replaced by one real, `eligibleSlots`-eligible bench/IR player, every other slot
+  held at its current occupant) collapses this to 14-19 candidates per team -- measured ~2s for 19
+  candidates x `simulate_seasons(n_sims=5000)` against the real 8-team league. This is exactly PLAN.md's
+  own suggested framing ("FLEX slot choice, any position where a bench player is a legitimate
+  alternative to a starter"), not an invented shortcut: it is literally "which single bench player, if
+  any, is a real alternative to a specific starter," the actual decision a manager faces one slot at a
+  time. Deliberately does not search compound multi-slot swaps (e.g. changing FLEX and RB2
+  simultaneously) -- that reintroduces the same combinatorial blowup the single-swap scoping exists to
+  avoid. Verified live against the real league (`sim/tests/test_api_lineup_optimizer.py`): every
+  generated candidate differs from the baseline in exactly one slot, and the eventual "safest"/"highest
+  upside" pick is always either the baseline itself or one of these single-swap candidates -- both
+  observed live (team 6, "Olave Garden," picks two *different* single swaps: TE Tucker Kraft for
+  safest, FLEX Travis Etienne Jr. for highest upside -- a genuine three-way tradeoff; three of the real
+  league's 8 teams have no single swap that improves on the current lineup for either objective, an
+  honest result, not a bug).
+- **"Highest upside" search reuses `simulate_seasons()` directly via `roster_overrides`, once per
+  candidate, comparing `won_title`** -- never mean points, never single-week upside, per PLAN.md's
+  explicit instruction. Every other team in the league keeps its real ingested roster during this
+  search (`roster_overrides` only touches the one team_id under evaluation), so a candidate's title
+  probability reflects a change to this team alone, not a hypothetical change to the whole league.
+  `n_sims=5,000` per candidate (`DEFAULT_SEASON_N_SIMS`) -- higher than the live what-if default
+  (2,000) because this module ranks up to ~19 similar candidates against each other and a probability
+  that's close between two lineups needs less sampling noise in the ranking than a single before/after
+  comparison does; still fast (~2s total for 19 candidates against the real league).
+- **New deterministic seed: `sim.api.seeds.lineup_optimizer_seed(league_id, season_id, team_id)`**,
+  folding `team_id` into the existing `precompute_seed` formula so two different teams' searches in
+  the same league/season don't consume the identical draw sequence, while staying live-computed (not
+  cached) and reproducible like `/roster`/`/schedule`/`/playoff-planner`. Each candidate is fully
+  evaluated (weekly totals, then season outcome) before moving to the next, in a fixed, documented
+  order, so a given seed always reproduces the same result -- verified directly
+  (`test_result_is_deterministic_for_a_fixed_seed`).
+- **New route: `GET /league/{id}/lineup-optimizer/{team_id}`**, following every established pattern
+  from prior phases exactly: `resolve_season_id` for the optional season, `LeagueNotIngestedError`/
+  `UnknownTeamError` -> 404, `IngestError`/`ParamsError` subclasses -> 409, a thin
+  `_compute_from_raw`/`compute_lineup_optimizer` split (`sim/api/lineup_optimizer_view.py`) so grading
+  logic has fast, Postgres-free unit tests mirroring `sim.api.draft_autopsy_view` /
+  `sim.api.playoff_planner_view`. `UnknownTeamError` is a new, narrow `ValueError` subclass (not an
+  `IngestError`) since it's not a data-availability problem -- it's a request for a team_id that was
+  never real for this league/season, the same class of "this specific thing was never real" case
+  `LeagueNotIngestedError` covers for the league itself.
+- **UI: three cards side by side, tradeoff made explicit as its own headline element, not left for the
+  reader to infer from two lists of names.** `lib/lineup-optimizer.ts::describeLineupTradeoff` is pure
+  arithmetic over the three already-returned `LineupProjection`s (floor delta, title-probability delta)
+  -- the same "natural-language sentence built from already-computed deltas, kept in `lib/`, not a
+  component" pattern `lib/whatif-compare.ts::describeTradeAsymmetry` already established in Phase 6, so
+  this isn't new analytics logic in the CLAUDE.md sense. Handles four distinct real cases observed live
+  against the real league: safest and upside are the literal same candidate (team 2's D/ST swap helps
+  both objectives at once); neither objective has a real single-swap improvement (3 of 8 teams); only
+  one objective improves; and both improve via genuinely different swaps (team 6). `RangeBar` (Phase
+  5b's roster-risk component) is reused as-is for each lineup's weekly floor/mean/ceiling, sharing one
+  `scaleMax` across all three cards in a row so bar lengths are directly comparable card to card, per
+  that component's own existing convention. Every roster row that differs from Current is highlighted
+  (amber background, bold name, swap icon) using the API's own `is_swap` field -- the frontend never
+  re-derives which slot changed by diffing player ids itself.
+- **Team switcher is a server-navigated `?team=` link row (`components/lineup/team-picker.tsx`), not
+  client-side `useState` like the What-If page's scenario builders.** This page's computation is a
+  genuine live search (weekly MC sampling plus up to ~19 fresh `simulate_seasons()` calls per team),
+  not a cheap read -- matches this app's established pattern of URL-driven Server Component pages
+  (dashboard, power rankings, playoffs) rather than What-If's in-place client scenario runs, and gets a
+  real Next.js `loading.tsx` skeleton for free on every team switch.
+- **Verification**: `pytest -q` 171 passed (156 from Phases 0-8 plus 15 new in
+  `sim/tests/test_api_lineup_optimizer.py`); `mypy --strict sim ingest` 21 pre-existing errors (0 new);
+  `ruff check sim ingest db scripts` shows only the same pre-existing findings in files this phase
+  didn't touch (0 new in any Phase 9a file). Web: `tsc --noEmit`, `eslint .`, and `npm run build`
+  (production) all clean. Visually verified in a real browser (uvicorn + Next.js dev server, both
+  against the real league, `league_id=885686492`) at 375px mobile and 1440px desktop: team switcher,
+  framing note, tradeoff headline, and all three lineup cards (weekly range bar, title/playoff odds,
+  finish-distribution strip, full roster with swap highlighting) render correct real data for multiple
+  teams, including a genuine three-way tradeoff (team 6) and a no-improvement-available case (team 1);
+  confirmed no page-level horizontal scroll at 375px (`scrollWidth === innerWidth`, checked both before
+  and after scrolling) and zero console errors. One verification wrinkle, the same class already
+  flagged in Phase 8: `computer` screenshot/scroll calls intermittently hung or returned a blank image
+  partway down this page in this browser tool; cross-checked with `get_page_text` first (itself
+  sometimes stale immediately after a fresh navigation) and, when that also looked incomplete, with
+  direct `document.body.textContent` reads via the JS tool, which consistently showed the full, correct
+  real content every time -- confirmed a tooling artifact of this session's browser pane, not an app
+  bug, the same conclusion Phase 8 reached under the same symptom.

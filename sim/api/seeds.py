@@ -56,6 +56,22 @@ def precompute_seed(league_id: int, season_id: int) -> int:
     return (league_id * _LEAGUE_MULTIPLIER + season_id) % _SEED_MODULUS
 
 
+def lineup_optimizer_seed(league_id: int, season_id: int, team_id: int) -> int:
+    """Deterministic seed for the Lineup Optimizer (GET
+    /league/{id}/lineup-optimizer/{team_id}).
+
+    Live-computed per request, like `/roster`/`/schedule`/`/playoff-planner`
+    -- not cached -- but still deterministically reproducible, matching
+    `precompute_seed`'s reasoning: the same (league_id, season_id, team_id)
+    always yields the same seed. `team_id` is folded in (not just
+    `precompute_seed(league_id, season_id)` reused as-is) so two different
+    teams' searches in the same league/season don't consume the identical
+    random draw sequence -- each team's candidate-lineup search is its own
+    independently reproducible computation.
+    """
+    return (precompute_seed(league_id, season_id) * _LEAGUE_MULTIPLIER + team_id) % _SEED_MODULUS
+
+
 def draw_whatif_seed() -> int:
     """A fresh, OS-entropy-derived seed for a live what-if run that did not
     request a specific one.

@@ -11,6 +11,8 @@ in route handlers" rules both apply directly here.
     POST /league/{league_id}/whatif       live, n_sims=2000, roster overrides
     GET  /league/{league_id}/roster       team rosters + per-player risk metrics
     GET  /league/{league_id}/schedule     regular-season schedule + current week
+    GET  /league/{league_id}/lineup-optimizer/{team_id}
+                                           current/safest/highest-upside lineups
 
 Both routes accept the ingest schema's real grain: an optional `season_id`
 (query param on GET, body field on POST). If omitted, the most recently
@@ -52,6 +54,13 @@ from sim.api.draft_autopsy_view import (
     PositionTiming,
     TeamDraftAutopsy,
     compute_draft_autopsy,
+)
+from sim.api.lineup_optimizer_view import (
+    LineupOptimizerResult,
+    LineupProjection,
+    LineupSlotAssignment,
+    UnknownTeamError,
+    compute_lineup_optimizer,
 )
 from sim.api.params_loader import LeagueNotIngestedError, load_league, resolve_season_id
 from sim.api.playoff_planner_view import (
@@ -355,6 +364,47 @@ class PlayoffPlannerResponse(BaseModel):
     teams: list[TeamPlayoffPlanOut]
 
 
+class LineupSlotAssignmentOut(BaseModel):
+    slot_label: str
+    player_id: int
+    player_name: str
+    position: str
+    is_swap: bool
+
+
+class LineupProjectionOut(BaseModel):
+    """One of the three lineups (Current / Safest / Highest upside) for a
+    team -- see `sim.api.lineup_optimizer_view.LineupProjection` for the
+    exact meaning of every field, in particular `weekly_floor`/
+    `weekly_ceiling` (real Monte Carlo samples of this lineup's team TOTAL,
+    never a sum of individual player floors/ceilings) and
+    `title_probability` (from a real `simulate_seasons()` call with only
+    this team's lineup overridden to this candidate)."""
+
+    label: str
+    assignments: list[LineupSlotAssignmentOut]
+    weekly_mean: float
+    weekly_floor: float
+    weekly_ceiling: float
+    title_probability: float
+    playoff_probability: float
+    finish_distribution: list[float]
+
+
+class LineupOptimizerResponse(BaseModel):
+    league_id: int
+    season_id: int
+    team_id: int
+    team_name: str
+    seed: int
+    weekly_n_sims: int
+    season_n_sims: int
+    n_candidates_considered: int
+    current: LineupProjectionOut
+    safest: LineupProjectionOut
+    highest_upside: LineupProjectionOut
+
+
 def _to_roster_player_out(player: RosterPlayer) -> RosterPlayerOut:
     return RosterPlayerOut(
         player_id=player.player_id,
@@ -543,6 +593,45 @@ def _to_playoff_planner_response(planner: PlayoffPlannerResult) -> PlayoffPlanne
         seeding=[_to_seed_odds_out(s) for s in planner.seeding],
         bracket=[_to_bracket_matchup_out(b) for b in planner.bracket],
         teams=[_to_team_playoff_plan_out(t) for t in planner.teams],
+    )
+
+
+def _to_lineup_slot_assignment_out(assignment: LineupSlotAssignment) -> LineupSlotAssignmentOut:
+    return LineupSlotAssignmentOut(
+        slot_label=assignment.slot_label,
+        player_id=assignment.player_id,
+        player_name=assignment.player_name,
+        position=assignment.position,
+        is_swap=assignment.is_swap,
+    )
+
+
+def _to_lineup_projection_out(projection: LineupProjection) -> LineupProjectionOut:
+    return LineupProjectionOut(
+        label=projection.label,
+        assignments=[_to_lineup_slot_assignment_out(a) for a in projection.assignments],
+        weekly_mean=projection.weekly_mean,
+        weekly_floor=projection.weekly_floor,
+        weekly_ceiling=projection.weekly_ceiling,
+        title_probability=projection.title_probability,
+        playoff_probability=projection.playoff_probability,
+        finish_distribution=list(projection.finish_distribution),
+    )
+
+
+def _to_lineup_optimizer_response(result: LineupOptimizerResult) -> LineupOptimizerResponse:
+    return LineupOptimizerResponse(
+        league_id=result.league_id,
+        season_id=result.season_id,
+        team_id=result.team_id,
+        team_name=result.team_name,
+        seed=result.seed,
+        weekly_n_sims=result.weekly_n_sims,
+        season_n_sims=result.season_n_sims,
+        n_candidates_considered=result.n_candidates_considered,
+        current=_to_lineup_projection_out(result.current),
+        safest=_to_lineup_projection_out(result.safest),
+        highest_upside=_to_lineup_projection_out(result.highest_upside),
     )
 
 
@@ -786,3 +875,37 @@ def get_playoff_planner(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return _to_playoff_planner_response(planner)
+
+
+@app.get(
+    "/league/{league_id}/lineup-optimizer/{team_id}",
+    response_model=LineupOptimizerResponse,
+)
+def get_lineup_optimizer(
+    league_id: int,
+    team_id: int,
+    season_id: int | None = None,
+    seed: int | None = None,
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> LineupOptimizerResponse:
+    """Current / safest / highest-upside lineups for one team -- see
+    `sim.api.lineup_optimizer_view`'s module docstring for the full
+    methodology: why floor is derived from real Monte Carlo samples of the
+    team total (never a sum of individual player floors), why
+    "highest upside" means season title probability from a real
+    `simulate_seasons()` call (never mean points), and exactly what search
+    space ("every single-slot swap") makes re-simulating that tractable.
+    Raises 404 for an unknown team_id, exactly like an un-ingested league."""
+    try:
+        resolved_season_id = resolve_season_id(conn, league_id, season_id)
+        result = compute_lineup_optimizer(
+            conn, league_id, resolved_season_id, team_id, seed=seed
+        )
+    except LeagueNotIngestedError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except UnknownTeamError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except _DATA_UNAVAILABLE_ERRORS as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return _to_lineup_optimizer_response(result)

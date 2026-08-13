@@ -1,6 +1,7 @@
 import "server-only";
 import type {
   DraftAutopsyResponse,
+  LineupOptimizerResponse,
   PlayoffPlannerResponse,
   RosterResponse,
   ScheduleResponse,
@@ -160,6 +161,22 @@ export function getPlayoffPlanner(
   seasonId?: number,
 ): Promise<PlayoffPlannerResponse> {
   return getJson<PlayoffPlannerResponse>(`/league/${leagueId}/playoff-planner`, {
+    season_id: seasonId,
+  });
+}
+
+/** GET /league/{id}/lineup-optimizer/{team_id} -- see
+ * sim.api.lineup_optimizer_view for the full methodology: why floor comes
+ * from real Monte Carlo samples of the team total (never a sum of
+ * individual player floors), why "highest upside" means season title
+ * probability (never mean points), and exactly what search space
+ * ("every single-slot swap") makes re-simulating that tractable. */
+export function getLineupOptimizer(
+  leagueId: number,
+  teamId: number,
+  seasonId?: number,
+): Promise<LineupOptimizerResponse> {
+  return getJson<LineupOptimizerResponse>(`/league/${leagueId}/lineup-optimizer/${teamId}`, {
     season_id: seasonId,
   });
 }

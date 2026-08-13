@@ -281,3 +281,53 @@ export interface PlayoffPlannerResponse {
   bracket: BracketMatchup[];
   teams: TeamPlayoffPlan[];
 }
+
+/** Mirrors sim.api.app.LineupSlotAssignmentOut. `is_swap` is true when this
+ * player is NOT who the team's actual ingested lineup starts in this slot
+ * -- server-computed, so the UI never has to re-derive "what changed" by
+ * comparing player_ids itself. */
+export interface LineupSlotAssignment {
+  slot_label: string;
+  player_id: number;
+  player_name: string;
+  position: string;
+  is_swap: boolean;
+}
+
+/**
+ * Mirrors sim.api.app.LineupProjectionOut / sim.api.lineup_optimizer_view.LineupProjection.
+ * `weekly_floor`/`weekly_ceiling` are the 10th/90th percentile of real Monte
+ * Carlo samples of this exact lineup's TEAM TOTAL for one week -- never a
+ * sum of individual player floors/ceilings (see that module's docstring for
+ * why the distinction matters). `title_probability`/`playoff_probability`/
+ * `finish_distribution` come from a real `simulate_seasons()` call with
+ * only this one team's lineup overridden to this candidate.
+ */
+export interface LineupProjection {
+  label: string;
+  assignments: LineupSlotAssignment[];
+  weekly_mean: number;
+  weekly_floor: number;
+  weekly_ceiling: number;
+  title_probability: number;
+  playoff_probability: number;
+  finish_distribution: number[];
+}
+
+/** Mirrors sim.api.app.LineupOptimizerResponse. `n_candidates_considered`
+ * is the baseline plus every single-slot swap this team's search actually
+ * evaluated -- see sim.api.lineup_optimizer_view's module docstring for
+ * exactly what search space that is and why. */
+export interface LineupOptimizerResponse {
+  league_id: number;
+  season_id: number;
+  team_id: number;
+  team_name: string;
+  seed: number;
+  weekly_n_sims: number;
+  season_n_sims: number;
+  n_candidates_considered: number;
+  current: LineupProjection;
+  safest: LineupProjection;
+  highest_upside: LineupProjection;
+}
