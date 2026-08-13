@@ -34,11 +34,11 @@ Replace the light palette in `:root` with a dark-only palette. No `.dark` class 
 | Border | `--border` / `--input` | `#1E293B` | used at reduced opacity (`/70`) on glass surfaces |
 | Primary | `--primary` | `#3B82F6` | electric blue; glow variant `#60A5FA` for shadows/rings |
 | Secondary | `--secondary` / `--muted` | dark neutral, distinct from `--card` | structural shadcn slot, not a data color |
-| Brand accent | `--brand-accent` | `#D7FF3F` | neon yellow — rare use only (hero glow numbers, top-tier badges), not a general UI color, per Image 2's restrained use |
-| Brand accent foreground | `--brand-accent-foreground` | dark (`#111827` or similar) | verify contrast on `#D7FF3F` per WCAG, same approach MASTER.md already used for the light-theme amber |
+| Brand accent | `--brand-accent` | `#39FF14` | neon green — rare use only (hero glow numbers, top-tier badges), not a general UI color, per Image 2's restrained use |
+| Brand accent foreground | `--brand-accent-foreground` | dark (`#111827` or similar) | verify contrast on `#39FF14` per WCAG, same approach MASTER.md already used for the light-theme amber |
 | Destructive | `--destructive` | `#F87171` | readable red-on-dark, verify contrast |
 | Ring | `--ring` | `#60A5FA` | focus ring, must stay visible per MASTER's a11y anti-patterns |
-| Chart 1–5 | `--chart-1..5` | `#3B82F6`, `#A78BFA`, `#D7FF3F`, `#2DD4BF`, `#F472B6` | glow-capable categorical set |
+| Chart 1–5 | `--chart-1..5` | `#3B82F6`, `#A78BFA`, `#39FF14`, `#2DD4BF`, `#F472B6` | glow-capable categorical set |
 
 New tokens, additive:
 - `--shadow-glow-primary`, `--shadow-glow-accent` — soft colored `box-shadow` values for hover/active glow states.
@@ -59,7 +59,7 @@ Motion dial in `MASTER.md` changes from 3/10 ("Subtle") to ~7/10. The "Ornate de
 Each of these keeps its existing props/API — only internal Tailwind classes and CSS variable usage change, so no consuming component needs to change its usage:
 
 - **`Card`**: translucent glass (`bg-card/70 backdrop-blur-md`), soft `ring-1 ring-border/70`, hover state = slight lift (`-translate-y-0.5`) + glow ring, transform/shadow only (no layout shift, per MASTER's carried-over anti-pattern).
-- **`Button`**: `default` variant becomes glow-blue; a new rare accent-style treatment (neon yellow, `brand-accent` token) reserved for standout CTAs, not the default button look.
+- **`Button`**: `default` variant becomes glow-blue; a new rare accent-style treatment (neon green, `brand-accent` token) reserved for standout CTAs, not the default button look.
 - **`Badge`**: same variant set, dark-glass background per variant color.
 - **`Table`**: dark rows, subtle glow-tinted row hover (matches Image 1's "Results" panel row highlighting).
 - **`Tabs`**, **`Tooltip`**, **`Separator`**, **`Skeleton`**: token-level retheme only, no structural change.
