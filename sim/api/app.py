@@ -54,6 +54,14 @@ from sim.api.draft_autopsy_view import (
     compute_draft_autopsy,
 )
 from sim.api.params_loader import LeagueNotIngestedError, load_league, resolve_season_id
+from sim.api.playoff_planner_view import (
+    BracketMatchup,
+    PlayoffPlannerResult,
+    PlayoffSeedOdds,
+    SlotPlayoffStrength,
+    TeamPlayoffPlan,
+    compute_playoff_planner,
+)
 from sim.api.roster_view import RosterPlayer, TeamRosterView, load_team_rosters
 from sim.api.schedule_view import ScheduledMatchup, load_schedule
 from sim.api.scheduler import start_scheduler
@@ -284,6 +292,69 @@ class DraftAutopsyResponse(BaseModel):
     teams: list[TeamDraftAutopsyOut]
 
 
+class SlotPlayoffStrengthOut(BaseModel):
+    """One starting slot's playoff-window strength -- see
+    `sim.api.playoff_planner_view.SlotPlayoffStrength` for the exact
+    meaning of `floor_ratio_delta` (the floor-ratio gap that can appear only
+    because the playoff window is short, not because the underlying weekly
+    distribution changed)."""
+
+    slot_label: str
+    regular_mean_points_per_week: float
+    playoff_mean_points_per_week: float
+    regular_floor_points_per_week: float
+    playoff_floor_points_per_week: float
+    regular_floor_ratio: float
+    playoff_floor_ratio: float
+    floor_ratio_delta: float
+    has_bench_depth: bool
+    league_rank: int
+    league_team_count: int
+    league_percentile: float
+    is_playoff_specific_weakness: bool
+
+
+class PlayoffSeedOddsOut(BaseModel):
+    team_id: int
+    team_name: str
+    title_probability: float
+    playoff_probability: float
+    reached_final_probability: float
+    finish_distribution: list[float]
+    seed_probabilities: list[float]
+    projected_seed: int | None
+
+
+class BracketMatchupOut(BaseModel):
+    high_seed: int
+    high_seed_team_id: int | None
+    high_seed_team_name: str | None
+    low_seed: int
+    low_seed_team_id: int | None
+    low_seed_team_name: str | None
+
+
+class TeamPlayoffPlanOut(BaseModel):
+    team_id: int
+    team_name: str
+    slot_strengths: list[SlotPlayoffStrengthOut]
+    weakest_slot: str | None
+    recommendation: str
+
+
+class PlayoffPlannerResponse(BaseModel):
+    league_id: int
+    season_id: int
+    n_regular_weeks: int
+    n_playoff_rounds: int
+    n_playoff_teams: int
+    seed: int
+    n_sims: int
+    seeding: list[PlayoffSeedOddsOut]
+    bracket: list[BracketMatchupOut]
+    teams: list[TeamPlayoffPlanOut]
+
+
 def _to_roster_player_out(player: RosterPlayer) -> RosterPlayerOut:
     return RosterPlayerOut(
         player_id=player.player_id,
@@ -405,6 +476,73 @@ def _to_draft_autopsy_response(autopsy: DraftAutopsy) -> DraftAutopsyResponse:
         season_id=autopsy.season_id,
         rank_source=autopsy.rank_source,
         teams=[_to_team_draft_autopsy_out(t) for t in autopsy.teams],
+    )
+
+
+def _to_slot_playoff_strength_out(slot: SlotPlayoffStrength) -> SlotPlayoffStrengthOut:
+    return SlotPlayoffStrengthOut(
+        slot_label=slot.slot_label,
+        regular_mean_points_per_week=slot.regular_mean_points_per_week,
+        playoff_mean_points_per_week=slot.playoff_mean_points_per_week,
+        regular_floor_points_per_week=slot.regular_floor_points_per_week,
+        playoff_floor_points_per_week=slot.playoff_floor_points_per_week,
+        regular_floor_ratio=slot.regular_floor_ratio,
+        playoff_floor_ratio=slot.playoff_floor_ratio,
+        floor_ratio_delta=slot.floor_ratio_delta,
+        has_bench_depth=slot.has_bench_depth,
+        league_rank=slot.league_rank,
+        league_team_count=slot.league_team_count,
+        league_percentile=slot.league_percentile,
+        is_playoff_specific_weakness=slot.is_playoff_specific_weakness,
+    )
+
+
+def _to_seed_odds_out(seeding: PlayoffSeedOdds) -> PlayoffSeedOddsOut:
+    return PlayoffSeedOddsOut(
+        team_id=seeding.team_id,
+        team_name=seeding.team_name,
+        title_probability=seeding.title_probability,
+        playoff_probability=seeding.playoff_probability,
+        reached_final_probability=seeding.reached_final_probability,
+        finish_distribution=list(seeding.finish_distribution),
+        seed_probabilities=list(seeding.seed_probabilities),
+        projected_seed=seeding.projected_seed,
+    )
+
+
+def _to_bracket_matchup_out(matchup: BracketMatchup) -> BracketMatchupOut:
+    return BracketMatchupOut(
+        high_seed=matchup.high_seed,
+        high_seed_team_id=matchup.high_seed_team_id,
+        high_seed_team_name=matchup.high_seed_team_name,
+        low_seed=matchup.low_seed,
+        low_seed_team_id=matchup.low_seed_team_id,
+        low_seed_team_name=matchup.low_seed_team_name,
+    )
+
+
+def _to_team_playoff_plan_out(team: TeamPlayoffPlan) -> TeamPlayoffPlanOut:
+    return TeamPlayoffPlanOut(
+        team_id=team.team_id,
+        team_name=team.team_name,
+        slot_strengths=[_to_slot_playoff_strength_out(s) for s in team.slot_strengths],
+        weakest_slot=team.weakest_slot,
+        recommendation=team.recommendation,
+    )
+
+
+def _to_playoff_planner_response(planner: PlayoffPlannerResult) -> PlayoffPlannerResponse:
+    return PlayoffPlannerResponse(
+        league_id=planner.league_id,
+        season_id=planner.season_id,
+        n_regular_weeks=planner.n_regular_weeks,
+        n_playoff_rounds=planner.n_playoff_rounds,
+        n_playoff_teams=planner.n_playoff_teams,
+        seed=planner.seed,
+        n_sims=planner.n_sims,
+        seeding=[_to_seed_odds_out(s) for s in planner.seeding],
+        bracket=[_to_bracket_matchup_out(b) for b in planner.bracket],
+        teams=[_to_team_playoff_plan_out(t) for t in planner.teams],
     )
 
 
@@ -624,3 +762,27 @@ def get_draft_autopsy(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return _to_draft_autopsy_response(autopsy)
+
+
+@app.get("/league/{league_id}/playoff-planner", response_model=PlayoffPlannerResponse)
+def get_playoff_planner(
+    league_id: int,
+    season_id: int | None = None,
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> PlayoffPlannerResponse:
+    """Projected playoff bracket, seeding odds, and per-roster-slot playoff-
+    window strength -- see `sim.api.playoff_planner_view`'s module docstring
+    for the full methodology, including why this reuses
+    `sim.engine.simulate_seasons()` and `sim.engine._sample_player_weeks`
+    unmodified rather than adding a second simulation path, and how it
+    resolves PLAN.md's "strength of schedule" phrase for a fixture with no
+    real NFL opponent data."""
+    try:
+        resolved_season_id = resolve_season_id(conn, league_id, season_id)
+        planner = compute_playoff_planner(conn, league_id, resolved_season_id)
+    except LeagueNotIngestedError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except _DATA_UNAVAILABLE_ERRORS as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return _to_playoff_planner_response(planner)

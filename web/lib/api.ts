@@ -1,6 +1,7 @@
 import "server-only";
 import type {
   DraftAutopsyResponse,
+  PlayoffPlannerResponse,
   RosterResponse,
   ScheduleResponse,
   SeasonReplayResponse,
@@ -147,6 +148,18 @@ export function getDraftAutopsy(
   seasonId?: number,
 ): Promise<DraftAutopsyResponse> {
   return getJson<DraftAutopsyResponse>(`/league/${leagueId}/draft-autopsy`, {
+    season_id: seasonId,
+  });
+}
+
+/** GET /league/{id}/playoff-planner -- see sim.api.playoff_planner_view for
+ * the full methodology (projected bracket, seeding odds, per-roster-slot
+ * playoff-window strength, and the bench-depth-driven weakness signal). */
+export function getPlayoffPlanner(
+  leagueId: number,
+  seasonId?: number,
+): Promise<PlayoffPlannerResponse> {
+  return getJson<PlayoffPlannerResponse>(`/league/${leagueId}/playoff-planner`, {
     season_id: seasonId,
   });
 }

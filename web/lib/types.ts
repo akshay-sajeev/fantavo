@@ -202,3 +202,82 @@ export interface DraftAutopsyResponse {
   rank_source: string;
   teams: TeamDraftAutopsy[];
 }
+
+/**
+ * Mirrors sim.api.app.SlotPlayoffStrengthOut / sim.api.playoff_planner_view.SlotPlayoffStrength.
+ * `floor_ratio_delta = regular_floor_ratio - playoff_floor_ratio`: positive
+ * means this slot's bad-week floor is proportionally worse in the
+ * compressed playoff window than over a full season -- see that module's
+ * docstring for why this number alone is nearly identical across every team
+ * at a given slot, and why `has_bench_depth` (a real per-team fact) is what
+ * actually decides `is_playoff_specific_weakness`.
+ */
+export interface SlotPlayoffStrength {
+  slot_label: string;
+  regular_mean_points_per_week: number;
+  playoff_mean_points_per_week: number;
+  regular_floor_points_per_week: number;
+  playoff_floor_points_per_week: number;
+  regular_floor_ratio: number;
+  playoff_floor_ratio: number;
+  floor_ratio_delta: number;
+  has_bench_depth: boolean;
+  /** 1 = the league's strongest projected playoff-weeks scorer at this slot. */
+  league_rank: number;
+  league_team_count: number;
+  /** 0-100; 100 = strongest in the league at this slot. */
+  league_percentile: number;
+  is_playoff_specific_weakness: boolean;
+}
+
+/** Mirrors sim.api.app.PlayoffSeedOddsOut. `seed_probabilities[s]` is the
+ * probability this team ends the regular season holding seed `s` (index 0 =
+ * top seed) -- length n_playoff_teams, summing to `playoff_probability`. */
+export interface PlayoffSeedOdds {
+  team_id: number;
+  team_name: string;
+  title_probability: number;
+  playoff_probability: number;
+  reached_final_probability: number;
+  finish_distribution: number[];
+  seed_probabilities: number[];
+  /** 1-indexed seed this team is assigned in the single projected bracket,
+   * or null if the maximum-weight assignment did not select it. */
+  projected_seed: number | null;
+}
+
+/** Mirrors sim.api.app.BracketMatchupOut. Round 1 of the single projected
+ * bracket only -- see sim.api.playoff_planner_view for why a later round
+ * (e.g. the final) is intentionally not named with specific teams. */
+export interface BracketMatchup {
+  high_seed: number;
+  high_seed_team_id: number | null;
+  high_seed_team_name: string | null;
+  low_seed: number;
+  low_seed_team_id: number | null;
+  low_seed_team_name: string | null;
+}
+
+export interface TeamPlayoffPlan {
+  team_id: number;
+  team_name: string;
+  slot_strengths: SlotPlayoffStrength[];
+  weakest_slot: string | null;
+  /** A real narrative synthesized server-side from this team's own
+   * slot-strength numbers -- never computed or reworded in a component. */
+  recommendation: string;
+}
+
+/** Mirrors sim.api.app.PlayoffPlannerResponse. */
+export interface PlayoffPlannerResponse {
+  league_id: number;
+  season_id: number;
+  n_regular_weeks: number;
+  n_playoff_rounds: number;
+  n_playoff_teams: number;
+  seed: number;
+  n_sims: number;
+  seeding: PlayoffSeedOdds[];
+  bracket: BracketMatchup[];
+  teams: TeamPlayoffPlan[];
+}

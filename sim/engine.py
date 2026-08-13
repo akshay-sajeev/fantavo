@@ -200,6 +200,23 @@ def _next_power_of_two(n: int) -> int:
     return 1 << (n - 1).bit_length()
 
 
+def bracket_pairings(count: int) -> tuple[tuple[int, int], ...]:
+    """Standard single-elimination pairing for `count` seeds (0-indexed rank
+    within the round, 0 = top seed): rank `i` from the top half plays rank
+    `count - 1 - i` from the bottom half -- i.e. 1v4, 2v3 for a 4-seed round,
+    1v8/2v7/3v6/4v5 for an 8-seed round.
+
+    This is the exact pairing rule `_run_playoffs` applies every round,
+    extracted into its own pure function (not reimplemented) so a caller
+    that needs to describe a single *projected* bracket -- e.g.
+    `sim.api.playoff_planner_view`, which has no per-simulation score array
+    to feed `_run_playoffs` -- can produce the identical pairing structure
+    without duplicating the rule. `_run_playoffs` below calls this function
+    too, so the two can never silently diverge.
+    """
+    return tuple((i, count - 1 - i) for i in range(count // 2))
+
+
 def _run_playoffs(
     seeds: np.ndarray,
     playoff_scores: np.ndarray,
@@ -229,7 +246,10 @@ def _run_playoffs(
             advancing, playing = alive[:, :0], alive
 
         m = playing.shape[1]
-        high, low = playing[:, : m // 2], playing[:, m // 2 :][:, ::-1]
+        pairs = bracket_pairings(m)
+        high_idx = np.array([p[0] for p in pairs])
+        low_idx = np.array([p[1] for p in pairs])
+        high, low = playing[:, high_idx], playing[:, low_idx]
 
         week = playoff_scores[:, round_idx, :]
         high_pts = np.take_along_axis(week, high, axis=1)

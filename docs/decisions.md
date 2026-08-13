@@ -1189,3 +1189,129 @@ trigger before real drafted rosters existed anywhere in this codebase.
   league (`league_id=-1990001`) renders a clean, readable 409 panel instead
   of a crash or blank page, since its mock draft has no pick sequence to
   grade.
+
+## Phase 8 — Playoff Planner
+
+- **"Run the simulator restricted to the league's own playoff weeks" is an output restriction, not
+  an input restriction.** Which two teams occupy a bracket seed slot is itself an output of the
+  regular season (`SimulationResult.seed_rank`), so playoff weeks cannot be simulated in isolation
+  from the regular season that determines who's in them -- and `raw["schedule"]` has zero playoff
+  entries anyway (ESPN doesn't publish playoff pairings until real seeding exists, confirmed
+  directly against the fixture). `simulate_seasons()` is called completely unmodified (full
+  regular season + `n_playoff_rounds`, exactly as every other feature calls it); this phase's
+  module only *reports* on the playoff-relevant slice of what it already returns/samples. Full
+  reasoning lives in `sim/api/playoff_planner_view.py`'s module docstring.
+- **The "strength of schedule" data-gap question, resolved as the task laid out: fantasy-opponent
+  strength, not real NFL defensive strength.** This fixture has no real NFL opponent/game-schedule
+  data anywhere (only `proTeamId`), so a literal "which NFL defense do you face in week 16" reading
+  is not buildable without inventing data and was not attempted. What's built instead: each team's
+  own roster strength, position by position, for the playoff-length window, ranked against the rest
+  of the league (`SlotPlayoffStrength.league_rank`/`league_percentile`) -- "how does my RB corps
+  compare to the field of realistic bracket opponents for these specific weeks," which is fully
+  derivable from data this codebase already has. Not attempted: a per-matchup "vs. your specific
+  projected round-1 opponent" comparison -- with 4 playoff teams there are only 2 possible round-1
+  pairings and the field-wide percentile already answers the more useful question ("who in this
+  league should I actually worry about at this position") without conditioning on an opponent
+  assignment that's itself uncertain.
+- **`sim.engine.bracket_pairings()` added and `_run_playoffs` refactored to call it**, extracting
+  the exact 1v4/2v3-style array-slice pairing rule (`high = playing[:, :m//2]`, `low =
+  reversed(playing[:, m//2:])`) that already existed inline, so the Playoff Planner's projected
+  bracket reuses the identical rule rather than re-deriving it -- not a second bracket-logic path.
+  Provably behavior-preserving (same index arithmetic, no rng involved): all 25 golden tests in
+  `sim/tests/test_engine.py` pass unchanged after the refactor, checked immediately, before writing
+  anything else.
+- **Real league setting note, left as-is on purpose:** this league's `playoffSeedingRule` is
+  `TOTAL_POINTS_SCORED` and `playoffReseed` is `false`, per the task's own DATA FACTS.
+  `simulate_seasons()`'s existing `standing_key = wins + 0.5*ties, tiebroken by points_for` already
+  matches `TOTAL_POINTS_SCORED` as a *tiebreaker* rule (not a primary-sort override), and
+  `_run_playoffs` always reseeds every round regardless of `playoffReseed`. Checked whether this
+  reseed-always behavior actually changes anything for *this* league: with exactly 2 rounds (4
+  playoff teams), reseeding only reorders which finalist is labeled "high" vs "low" going into the
+  championship, and the win/loss comparison (`high_pts > low_pts`) is symmetric in that labeling --
+  so it provably cannot change any simulated outcome here. Left `_run_playoffs` untouched rather
+  than adding reseed-toggle logic to the one shared simulation engine for a flag that is a no-op at
+  this league's current bracket size; worth a real fix only if/when a league with >2 playoff rounds
+  is ever simulated.
+- **Projected bracket: single most-probable seed assignment via `scipy.optimize.linear_sum_assignment`
+  over the (team x seed) probability matrix implied by `seed_rank`**, maximizing total assigned
+  probability -- the same optimization technique Phase 6's `season_replay_view` already established
+  for a structurally identical "best assignment of items to slots" problem (there: players to
+  lineup slots; here: teams to bracket seeds), not a new pattern. Only round 1 is named with
+  specific teams; a later round (the final, for this league) is deliberately shown as "winner of
+  Matchup N vs. winner of Matchup M" with no named teams, since which two round-1 winners actually
+  meet is itself stochastic and naming a pair would fabricate certainty the projection doesn't have.
+- **First design of `floor_ratio_delta` (regular-season floor ratio minus playoff-window floor
+  ratio) was NOT team-specific, and this was caught before shipping it as the weakness signal.**
+  `sim.params` fits one coefficient-of-variation per *position*, shared league-wide (Phase 2); the
+  Gamma shape parameter driving a floor/mean ratio is `(mean/sd)^2 = 1/CV^2`, independent of any
+  individual player's own mean. Verified live: every team's regular-season floor ratio at a given
+  slot label landed within ~0.001 of every other team's, and `floor_ratio_delta` cleared the
+  editorial 0.08 threshold for nearly every slot on every team (a real, but purely structural,
+  "short windows amplify volatility" fact, not a team-differentiated one). Shipping that alone as
+  "your weakness" would have recommended the same slot (whichever position has the smallest
+  starting group, e.g. FLEX) to literally every team in the league -- exactly the "generic template,
+  not real advice" failure PLAN.md explicitly warns against.
+- **Fix: `is_playoff_specific_weakness` requires `floor_ratio_delta` clearing the threshold AND
+  zero same-position bench depth**, the real per-team-differentiating signal -- computed the same
+  way `sim.api.roster_view`'s existing `positional_concentration` already does (count bench/IR
+  entries by their own `defaultPositionId`, not the literal slot label, so a bench RB backs up a
+  FLEX-RB starter too). This is the same "multiple signals together before a causal claim"
+  discipline `draft_autopsy_view._synthesize_structural_finding` already established. Confirmed
+  live this is genuinely team-differentiating where the raw delta wasn't: e.g. of the real league's
+  8 teams, 6 get "target D/ST" (only 2 of 8 carry a bench D/ST at all -- a real, honest fact about
+  how this league drafts, not noise), 1 gets "target TE" (the one team with zero bench TE), 1 gets
+  "target K" (no team in this league carries a bench K, so K's lower-but-still-real delta becomes
+  the deciding factor for whichever team has no other qualifying gap).
+- **Recommendation text is synthesized per team from real numbers** (`_synthesize_recommendation`
+  in `sim/api/playoff_planner_view.py`), the same "server-computed narrative, honest fallback when
+  nothing clears the bar" pattern `draft_autopsy_view` established -- never a template filled with
+  just the team name, and an explicit different sentence when no slot combines both a real delta and
+  zero bench depth ("no real playoff-specific weakness here").
+- **Live-computed, not cached, like `/roster`/`/schedule`/`/draft-autopsy` -- but deterministically
+  seeded** via `sim.api.seeds.precompute_seed(league_id, season_id)`, the exact formula the cached
+  `/simulation` endpoint already uses, reused rather than drawing a new one -- consistent numbers
+  for the same league/season across endpoints, and a single `rng` instance consumed sequentially by
+  `simulate_seasons()` then the per-slot `_sample_player_weeks` call, so the whole response is
+  reproducible end to end. `n_sims=10,000` (`DEFAULT_N_SIMS`), matching `PRECOMPUTE_N_SIMS`'s own
+  reasoning -- no waiting user for this route the way a live what-if has, so there's no reason to use
+  a smaller count. Full computation (regular+playoff simulation plus the per-team per-slot sampling
+  for 8 teams) runs in well under a second against the real league.
+- **Unlike Draft Autopsy, the SYNTHETIC validation league (`league_id=-1990001`) works fine here**,
+  confirmed with a dedicated test (`test_synthetic_league_also_produces_a_full_playoff_plan`) and
+  live against the running API: its settings (schedule length, playoff team count) are copied
+  verbatim from the real league by `scripts/ingest_synthetic_league.py`, and it has a real, fully
+  drafted roster (just no real pick *sequence*, which is what draft autopsy specifically needs and
+  this feature doesn't). One real consequence worth noting: the synthetic league's mock draft never
+  fills bench slots (Phase 5b), so every slot for every synthetic team shows zero bench depth --
+  an honest, if extreme, reflection of that fixture's real (if synthetic) roster shape, not a bug.
+- **UI layout mirrors Draft Autopsy's established precedent exactly**: per-team cards lead the page
+  (`TeamPlayoffCard`), each one leading with `RecommendationCallout` -- a distinct amber/brand-accent
+  treatment (not the primary-blue `StructuralFindingCard` styling) so it visually reads as an action,
+  not a finding -- followed by the per-slot strength breakdown (weakest slot shown first). One
+  shared `BracketPanel` + `SeedingOddsTable` follow below all 8 cards, once, matching "one shared
+  board after every team's own narrative" rather than repeating league-wide data inside every card.
+- **`SlotStrengthBar` shows two floor-ratio bars (full season vs. playoffs) per slot rather than a
+  bare delta number** -- MASTER.md's "distributions, not point estimates" principle applied to this
+  specific claim: the whole point is that the floor moves between two windows, which reads far more
+  legibly as two comparable bars than as a single subtracted number. `SeedProbabilityStrip` reuses
+  `FinishDistributionStrip`'s exact segmented-bar pattern (already MASTER.md's recommended shape for
+  a discretized probability mass function) for `seed_probabilities` instead of `finish_distribution`.
+- **Verification**: `pytest -q` 156 passed (138 from Phases 0-7 plus 18 new in
+  `sim/tests/test_api_playoff_planner.py`); `mypy --strict sim ingest` 21 pre-existing errors (0
+  new); `ruff check sim ingest db scripts` shows only the same pre-existing findings in files this
+  phase didn't touch (0 new in `sim/engine.py`, `sim/api/playoff_planner_view.py`,
+  `sim/api/app.py`, or the new test file). Web: `tsc --noEmit`, `eslint .`, and `npm run build`
+  (production) all clean. Visually verified in a real browser (uvicorn + Next.js dev server, both
+  against the real league, `league_id=885686492`) at 375px mobile and 1440px desktop: all 8 teams'
+  "Do this now" recommendations, per-slot floor-ratio bars (color-flagged red only for a genuine
+  bench-depth-driven weakness), the projected 1v4/2v3 bracket, and the league-wide seeding-odds
+  table with seed-probability strips all render with correct real data; confirmed no page-level
+  horizontal scroll at 375px (`scrollWidth === innerWidth`) and no console errors at either width.
+  One verification wrinkle, consistent with a known prior-phase tooling issue: screenshots taken
+  after scrolling deep down this page intermittently rendered blank in this browser tool regardless
+  of tab freshness or scroll method (raw scroll, keyboard `End`, element `scroll_to` all reproduced
+  it) -- cross-checked directly against the real DOM instead (`get_page_text` and the accessibility
+  tree via `read_page`, both queried against the scrolled-to content) to confirm the bracket panel
+  and seeding table render correct real data; zero console errors either way. Treated as the same
+  screenshot-capture tool artifact flagged before this phase started, not an app bug -- verified via
+  DOM content directly rather than assumed.
