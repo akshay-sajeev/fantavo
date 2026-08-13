@@ -1761,3 +1761,38 @@ nothing here needs undoing when that day comes.
   verified as "71st" not "71th") -- confirmed a tooling artifact, not an
   app bug, the same conclusion reached under the same symptom in three
   prior phases.
+
+## Phase 11 — League History and manager ratings: deferred, not built
+
+Not attempted. Before dispatching this phase, the fixture's
+`status.previousSeasons` field was checked and showed `[2025]`, which read as
+"one prior season exists, the user just needs to run
+`scripts/fetch_fixture.py --season 2025` themselves" -- the same kind of
+one-command prerequisite Phase 1 originally had. **The project owner
+corrected this directly: this league has no previous season.** Whatever
+`previousSeasons` reflects on ESPN's side (the league container's ID
+existing since 2025, a league-settings carryover, or something else
+ESPN-internal), it does not mean a real season was played by this group of
+managers. This is now trusted as ground truth over the JSON field -- the
+project owner's direct knowledge of their own league beats an inference from
+one status field, and no fetch was attempted on the strength of that field
+alone.
+
+**Why this can't be scoped down, unlike Weekly Recap (Phase 9c):** Weekly
+Recap is blocked on time (real weeks haven't been played *yet*, in an
+otherwise real single season already fully ingested) -- it will unblock
+itself the moment games are played. Phase 11 is blocked on this league
+having no history at all: "best and worst drafts" (plural), "championships"
+(plural), and "all-time manager ratings" all presuppose multiple completed
+seasons to compare across. With zero prior seasons, there is nothing to make
+"all-time" or "history" mean anything -- a single-season attempt would not
+be a reduced version of this feature, it would just be Draft Autopsy (Phase
+7) again under a different name, since draft-pick grading is the only one of
+Phase 11's five skill dimensions (draft/waiver/trade/lineup/luck) that
+doesn't itself require games having been played to compute.
+
+**Resolution:** deferred alongside Weekly Recap, Fantasy Lab, and draft
+replay (see PLAN.md's "Deferred by choice" section) -- correctly sequenced
+after this league has actually completed at least one full season of its
+own real history to look back on. No code was written; nothing needs
+undoing when that day comes.
