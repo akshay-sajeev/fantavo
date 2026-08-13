@@ -13,6 +13,8 @@ in route handlers" rules both apply directly here.
     GET  /league/{league_id}/schedule     regular-season schedule + current week
     GET  /league/{league_id}/lineup-optimizer/{team_id}
                                            current/safest/highest-upside lineups
+    GET  /league/{league_id}/waiver-intelligence/{team_id}
+                                           ranked free-agent priority list, per team
 
 Both routes accept the ingest schema's real grain: an optional `season_id`
 (query param on GET, body field on POST). If omitted, the most recently
@@ -76,6 +78,16 @@ from sim.api.schedule_view import ScheduledMatchup, load_schedule
 from sim.api.scheduler import start_scheduler
 from sim.api.season_replay_view import TeamSeasonReplay, compute_season_replay
 from sim.api.seeds import draw_whatif_seed
+from sim.api.waiver_intelligence_view import (
+    DEFAULT_LIMIT_PER_POSITION as WAIVER_DEFAULT_LIMIT_PER_POSITION,
+)
+from sim.api.waiver_intelligence_view import UnknownTeamError as WaiverUnknownTeamError
+from sim.api.waiver_intelligence_view import (
+    WaiverCandidate,
+    WaiverIntelligenceResult,
+    WaiverPositionGroup,
+    compute_waiver_intelligence,
+)
 from sim.engine import PlayerParams, simulate_seasons
 from sim.params.errors import ParamsError
 
@@ -405,6 +417,54 @@ class LineupOptimizerResponse(BaseModel):
     highest_upside: LineupProjectionOut
 
 
+class WaiverCandidateOut(BaseModel):
+    """One free agent, scored on Opportunity/Availability (Signals 1-2) for
+    one specific requesting team -- see `sim.api.waiver_intelligence_view`'s
+    module docstring for the exact derivation and meaning of every field.
+    League fit/Competition (Signals 3-4) live on the enclosing
+    `WaiverPositionGroupOut` instead, since they're position-level facts,
+    not player-level ones."""
+
+    player_id: int
+    player_name: str
+    injury_status: str | None
+    mean_points_per_game: float
+    season_availability: float
+    percent_owned: float
+    percent_started: float
+    percent_change: float
+    average_draft_position: float | None
+    start_rate_ratio: float
+    opportunity_score: float
+    expected_playable_points: float
+    reasoning: str
+
+
+class WaiverPositionGroupOut(BaseModel):
+    """One position's worth of ranked free-agent candidates for one specific
+    requesting team, plus the League fit / Competition facts (Signals 3-4)
+    -- see `sim.api.waiver_intelligence_view`'s module docstring, especially
+    "Why this is grouped by position, not one flat list"."""
+
+    position: str
+    bench_depth_relevant: bool
+    team_bench_depth_at_position: int
+    team_has_positional_need: bool
+    team_starters_at_position: list[str]
+    rival_teams_with_need: list[str]
+    group_reasoning: str
+    candidates: list[WaiverCandidateOut]
+
+
+class WaiverIntelligenceResponse(BaseModel):
+    league_id: int
+    season_id: int
+    team_id: int
+    team_name: str
+    ownership_data_note: str
+    groups: list[WaiverPositionGroupOut]
+
+
 def _to_roster_player_out(player: RosterPlayer) -> RosterPlayerOut:
     return RosterPlayerOut(
         player_id=player.player_id,
@@ -632,6 +692,50 @@ def _to_lineup_optimizer_response(result: LineupOptimizerResult) -> LineupOptimi
         current=_to_lineup_projection_out(result.current),
         safest=_to_lineup_projection_out(result.safest),
         highest_upside=_to_lineup_projection_out(result.highest_upside),
+    )
+
+
+def _to_waiver_candidate_out(candidate: WaiverCandidate) -> WaiverCandidateOut:
+    return WaiverCandidateOut(
+        player_id=candidate.player_id,
+        player_name=candidate.player_name,
+        injury_status=candidate.injury_status,
+        mean_points_per_game=candidate.mean_points_per_game,
+        season_availability=candidate.season_availability,
+        percent_owned=candidate.percent_owned,
+        percent_started=candidate.percent_started,
+        percent_change=candidate.percent_change,
+        average_draft_position=candidate.average_draft_position,
+        start_rate_ratio=candidate.start_rate_ratio,
+        opportunity_score=candidate.opportunity_score,
+        expected_playable_points=candidate.expected_playable_points,
+        reasoning=candidate.reasoning,
+    )
+
+
+def _to_waiver_position_group_out(group: WaiverPositionGroup) -> WaiverPositionGroupOut:
+    return WaiverPositionGroupOut(
+        position=group.position,
+        bench_depth_relevant=group.bench_depth_relevant,
+        team_bench_depth_at_position=group.team_bench_depth_at_position,
+        team_has_positional_need=group.team_has_positional_need,
+        team_starters_at_position=list(group.team_starters_at_position),
+        rival_teams_with_need=list(group.rival_teams_with_need),
+        group_reasoning=group.group_reasoning,
+        candidates=[_to_waiver_candidate_out(c) for c in group.candidates],
+    )
+
+
+def _to_waiver_intelligence_response(
+    result: WaiverIntelligenceResult,
+) -> WaiverIntelligenceResponse:
+    return WaiverIntelligenceResponse(
+        league_id=result.league_id,
+        season_id=result.season_id,
+        team_id=result.team_id,
+        team_name=result.team_name,
+        ownership_data_note=result.ownership_data_note,
+        groups=[_to_waiver_position_group_out(g) for g in result.groups],
     )
 
 
@@ -909,3 +1013,36 @@ def get_lineup_optimizer(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return _to_lineup_optimizer_response(result)
+
+
+@app.get(
+    "/league/{league_id}/waiver-intelligence/{team_id}",
+    response_model=WaiverIntelligenceResponse,
+)
+def get_waiver_intelligence(
+    league_id: int,
+    team_id: int,
+    season_id: int | None = None,
+    limit_per_position: int = WAIVER_DEFAULT_LIMIT_PER_POSITION,
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> WaiverIntelligenceResponse:
+    """A ranked, position-grouped waiver-wire priority list for one team,
+    scored on opportunity / availability / league fit / competition -- see
+    `sim.api.waiver_intelligence_view`'s module docstring for the full
+    methodology, the four signals' exact derivation, why the response is
+    grouped by position rather than one flat cross-position list, and why
+    this endpoint calls no simulation at all. Raises 404 for an unknown
+    team_id, exactly like the Lineup Optimizer."""
+    try:
+        resolved_season_id = resolve_season_id(conn, league_id, season_id)
+        result = compute_waiver_intelligence(
+            conn, league_id, resolved_season_id, team_id, limit_per_position=limit_per_position
+        )
+    except LeagueNotIngestedError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except WaiverUnknownTeamError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except _DATA_UNAVAILABLE_ERRORS as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return _to_waiver_intelligence_response(result)

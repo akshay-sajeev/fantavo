@@ -15,6 +15,7 @@ export function LeagueNav({ leagueId }: { leagueId: number }) {
     { href: `${base}/draft`, label: "Draft Autopsy" },
     { href: `${base}/playoffs`, label: "Playoff Planner" },
     { href: `${base}/lineup-optimizer`, label: "Lineup Optimizer" },
+    { href: `${base}/waivers`, label: "Waiver Intelligence" },
   ];
 
   return (

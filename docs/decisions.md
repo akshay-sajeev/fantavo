@@ -1425,3 +1425,132 @@ recap are separate future sessions, per PLAN.md's "three separate sessions" inst
   direct `document.body.textContent` reads via the JS tool, which consistently showed the full, correct
   real content every time -- confirmed a tooling artifact of this session's browser pane, not an app
   bug, the same conclusion Phase 8 reached under the same symptom.
+
+## Phase 9b — Waiver intelligence
+
+*Covers Phase 9's "Waiver intelligence" sub-feature (feature 9) only -- Lineup optimizer was Phase 9a;
+Weekly recap is a separate future session, per PLAN.md's "three separate sessions" instruction.*
+
+- **`_freeAgents` used directly, no widening needed -- the one Phase-9 sub-feature where that's true.**
+  Confirmed live: `raw["_freeAgents"]` already excludes every drafted player in this league (unlike the
+  pre-draft era, where it was the entire player universe -- see "No more mock data"), so it means exactly
+  "actually available to add" with zero extra filtering. Every other phase since the real draft needed
+  `ingest.parse.every_player_with_stats` (the free-agent/rostered union) because it needed projections for
+  players who are NOW rostered; this feature is the opposite case and doesn't need that union at all.
+- **Data-provenance investigation, same honesty discipline Phase 7 established for `draftRanksByRankType`:**
+  `ownership.percentOwned`/`percentStarted`/`percentChange`/`averageDraftPosition` and `injuryStatus` are
+  ESPN's own **cross-league** consensus data (aggregated across many ESPN leagues), not specific to this
+  league's own manager behavior or transaction history (this fixture has no waiver-claim/add-drop log for
+  any league). Documented explicitly in `sim/api/waiver_intelligence_view.py`'s module docstring, in the
+  API response (`ownership_data_note`), and in the UI itself (`OwnershipNote`) -- not just in this file.
+  Two candidate fields were investigated and found **unusable**, so not used anywhere: `ownership.activityLevel`
+  is `null` for all 300 real free agents (verified directly), and `player.active` is `True` for all 300 free
+  agents and all 128 rostered players alike -- both constants carry zero information, the same "a constant
+  field is indistinguishable from an invented one" reasoning that has recurred since Phase 1.
+- **Signal 1, Opportunity: `opportunity_score = 0.0` if `injuryStatus` is `OUT`/`INJURY_RESERVE`, else
+  `clip(percent_started / percent_owned, 0, 1)`.** The ratio -- among ESPN teams that already own this
+  player, what fraction actually start him -- is a real, directly-computed role-trust signal, verified live
+  to behave sensibly: K/D-ST (single starting slot, almost never handcuffed) cluster near 1.0 (Cam Little
+  0.91, Harrison Butker 0.88), while RB/WR/QB free agents cluster far lower even at high ownership (Patrick
+  Mahomes: 85% owned, 18% started, QUESTIONABLE at fetch time; Alvin Kamara: 50% owned, 2% started, ADP
+  156.7 -- a late-round handcuff stash). The `OUT`/`INJURY_RESERVE` override forces the score to the
+  natural floor of its own `[0,1]` range (a factual "not playing" statement) rather than blending in an
+  invented penalty coefficient; `QUESTIONABLE` deliberately does **not** override, since the ratio itself
+  already reflects real managers discounting a questionable player -- an extra invented penalty on top
+  would double-count real information with a made-up number. `averageDraftPosition` relative to this
+  player's own projection rank was investigated per PLAN.md's own suggestion and **deliberately rejected**
+  for Opportunity: that gap measures market-vs-model *value* disagreement, not role/usage certainty --
+  exactly the "already a good player" conflation PLAN.md's instruction warns against. Kept as a separate,
+  honest, display-only `average_draft_position` field instead (same treatment Phase 7 gave `player_adp`).
+- **Signal 2, Availability: `percent_owned` used as-is, no inversion.** Deliberately not a directional
+  "good/bad" score -- a high `percent_owned` free agent still on this league's wire is the more surprising,
+  often more valuable fact (a widely-valued player this league's managers haven't grabbed), the opposite of
+  "low ownership = hidden gem." It drives the reasoning text's framing, never the ranking itself.
+- **Signals 3 & 4, League fit / Competition: `sim.api.roster_view`'s `positional_concentration` /
+  `sim.api.playoff_planner_view`'s `bench_position_counts` RULE reused, reimplemented locally** (count a
+  team's own bench/IR entries by real `defaultPositionId` label) for the same reason `playoff_planner_view`'s
+  own docstring gives for the identical situation: the rule is shared, the local dataclass shape isn't.
+  League fit = the requesting team's own bench depth at a position; Competition = the identical rule applied
+  to every other team, naming rivals with zero depth (per PLAN.md's literal "which teams likely target him,"
+  not just a count).
+- **Caught before shipping (design flaw #1): K/D-ST bench depth is a near-constant, not a real per-team
+  signal.** Verified directly: 0 of this league's 8 real teams carry *any* bench K; only 2 of 8 carry any
+  bench D/ST. Using "zero bench depth" as a "need" signal for these two positions the same way as QB/RB/WR/TE
+  would make it trivially `True` for literally every team -- not team-differentiating, the same "verify this
+  is actually real signal before shipping it" discipline Phase 8 applied to `floor_ratio_delta`. Fix:
+  `_BENCH_DEPTH_RELEVANT_POSITIONS = {QB, RB, WR, TE}` (the same four positions `draft_autopsy_view` already
+  treats as worth a positional grade) gates Signals 3/4; K/D-ST get `team_has_positional_need=False`,
+  `rival_teams_with_need=()` always, plus an honest sentence explaining bench depth isn't a real decision at
+  those two positions in this league, rather than a fabricated need/no-need claim.
+- **Caught before shipping (design flaw #2, the bigger one): a first flat cross-position ranking was
+  dominated top-to-bottom by kickers for every team.** Root cause was structural, not a bug in one number:
+  `opportunity_score` is a *within-position* trust ratio, and K/D-ST structurally have almost no bench
+  competition at their own position, so they cluster near 0.9+ while RB/WR free agents (mostly
+  backups/committee pieces by definition) cluster much lower -- multiplied by a comparable per-game mean
+  (a solid K and a low-end skill free agent often both project 7-9 pts/game), `expected_playable_points`
+  was never an apples-to-apples number *across* positions. Fix: the response is grouped by position
+  (`WaiverPositionGroup`), `expected_playable_points` only ranks candidates *within* a group, and groups
+  themselves are ordered (real positional need first, in canonical QB/RB/WR/TE/D-ST/K order; K/D-ST last,
+  explicitly framed as streaming options). This also let League fit/Competition (genuinely position-level
+  facts) be stated once per group instead of being repeated verbatim on every candidate row, which the first
+  draft also did.
+- **Ranking is a lexicographic sort within a group (`expected_playable_points` descending), never a single
+  blended composite with invented weights** -- the same "no arbitrary relative weighting between two
+  real-but-differently-scaled numbers" discipline `draft_autopsy_view` established when it explicitly
+  rejected blending `value_gap` and an ADP-relative "steal" metric. `expected_playable_points =
+  mean_points_per_game * opportunity_score` is the exact same "mean times a `[0,1]` probability-like ratio"
+  pattern `roster_view._team_risk_rating` already uses (`sum(mean_i * availability_i)`), just applied to one
+  candidate instead of summed across a roster -- not a new kind of number.
+- **`simulate_seasons()` is not called anywhere in this module -- a deliberate scope decision, argued
+  explicitly rather than silently skipped.** A real extension was on the table: "how much would adding this
+  player change my title odds," via the exact same `roster_overrides` mechanism `lineup_optimizer_view`
+  already uses. `lineup_optimizer_view` makes that tractable by scoping to ~14-19 candidates for ONE
+  already-rostered team; waiver intelligence's candidate pool is up to 300 free agents, and a meaningful
+  "impact if added" number needs both a roster-construction decision (who gets replaced) AND a
+  per-candidate `simulate_seasons()` call -- either re-deriving `lineup_optimizer_view`'s entire search 300
+  times, or arbitrarily inventing which bench slot gets replaced. Kept simple per PLAN.md's own bare-minimum
+  ask; documented as a real, legitimate future extension in the module docstring, not dismissed. No RNG
+  anywhere in this module, unlike every other `sim.api` view module -- there's nothing stochastic to seed.
+- **New route: `GET /league/{id}/waiver-intelligence/{team_id}`**, following every established pattern:
+  `resolve_season_id` for the optional season, a local `UnknownTeamError` (`ValueError` subclass, same
+  "this specific thing was never real" class `LeagueNotIngestedError` covers for the league itself, mirrored
+  from -- not imported from -- `lineup_optimizer_view` to keep each view module self-contained like its
+  siblings) -> 404, `IngestError`/`ParamsError` subclasses -> 409, and a thin `_compute_from_raw`/
+  `compute_waiver_intelligence` split for fast Postgres-free unit tests. New `limit_per_position` query
+  param (default 8, an editorial UI-sizing choice, the same class as `roster_view`'s 10th/90th percentile
+  band) replaces a flat `limit` once the response became position-grouped.
+- **UI: `PositionGroupCard` leads with the group's League fit/Competition narrative as a headline callout**
+  (amber/brand-accent when a real need, quieter primary tone for "depth add," muted for K/D-ST "streaming
+  options") -- the same narrative-leads-data-follows layout Draft Autopsy's `StructuralFindingCard` and
+  Playoff Planner's `RecommendationCallout` already established. Each `CandidateRow` underneath leads with
+  its own server-synthesized Opportunity/Availability reasoning sentence, then supporting chips (opportunity
+  %, ownership %, projected pts/gm, ADP); rank number and `expected_playable_points` (labeled "realistic
+  weekly value") anchor the row. Together the group header and each row satisfy PLAN.md's "every entry says
+  why it matters for this specific roster" without repeating the identical rival-team sentence on every
+  single row within a position. `InjuryBadge` renders nothing for `ACTIVE`/missing status (a badge only
+  earns its place when there's real uncertainty), red for `OUT`/`INJURY_RESERVE` (matches the same set that
+  floors `opportunity_score` server-side), amber for `QUESTIONABLE`.
+- **`lib/format.ts` gained `formatPercentPoints`**, a deliberately separate function from the existing
+  `formatPercent` (which expects a `0-1` fraction and multiplies by 100) -- ESPN's ownership figures
+  (`percent_owned`/`percent_started`/`percent_change`) already arrive on a `0-100` scale from the API, so
+  reusing `formatPercent` on them would silently 100x every number. Keeping two named functions makes a call
+  site's intent unambiguous rather than one function with a scale flag that's easy to pass wrong.
+- **Verification**: `pytest -q` 186 passed (171 from Phases 0-9a plus 15 new in
+  `sim/tests/test_api_waiver_intelligence.py`); `mypy --strict sim ingest` 21 pre-existing errors (0 new);
+  `ruff check sim ingest db scripts` shows only the same pre-existing findings in files this phase didn't
+  touch, plus one new `TRY004` finding in the new module consistent with the exact same, already-accepted
+  pattern in `ingest/parse.py`/`ingest/scoring.py` (an `isinstance` guard raising `ValueError` for a
+  malformed fixture). Web: `tsc --noEmit`, `eslint .`, and `npm run build` (production) all clean. Visually
+  verified in a real browser (uvicorn + Next.js dev server, both against the real league,
+  `league_id=885686492`) at 375px mobile, 768px tablet, and 1440px desktop, for two different teams: Chinese
+  Chongqing Dockers (no real positional need anywhere -- every group renders as "Depth add" or "Streaming
+  options") and Captain Jahmyrica (a real TE need -- `Real need` amber callout leads the page, correctly
+  naming the one rival, Milking the McCaffinator, also thin at TE); confirmed the QB/RB/K/D-ST groups render
+  correctly for both teams with real, per-player reasoning text; confirmed `document.documentElement.scrollWidth
+  === clientWidth` at both 375px and 768px (no horizontal scroll) and zero console errors. Hit the same
+  `computer` screenshot/scroll tooling artifact Phases 8 and 9a already flagged (a scroll deep into the page
+  intermittently hung the tool and once bounced the tab back to the Overview page) -- cross-checked with
+  `document.body.textContent` via the JS tool each time, which consistently returned the full, correct real
+  content (verified the K/D-ST "streaming options" section and the TE "real need" section this way),
+  confirming a tooling artifact rather than an app bug, the same conclusion reached under the same symptom
+  in both prior phases.

@@ -7,6 +7,7 @@ import type {
   ScheduleResponse,
   SeasonReplayResponse,
   SimulationResponse,
+  WaiverIntelligenceResponse,
   WhatIfRequestBody,
 } from "@/lib/types";
 
@@ -179,4 +180,20 @@ export function getLineupOptimizer(
   return getJson<LineupOptimizerResponse>(`/league/${leagueId}/lineup-optimizer/${teamId}`, {
     season_id: seasonId,
   });
+}
+
+/** GET /league/{id}/waiver-intelligence/{team_id} -- see
+ * sim.api.waiver_intelligence_view for the full methodology: the four
+ * scoring signals (opportunity, availability, league fit, competition), why
+ * the response is grouped by position rather than one flat cross-position
+ * list, and why this route calls no simulation at all. */
+export function getWaiverIntelligence(
+  leagueId: number,
+  teamId: number,
+  seasonId?: number,
+): Promise<WaiverIntelligenceResponse> {
+  return getJson<WaiverIntelligenceResponse>(
+    `/league/${leagueId}/waiver-intelligence/${teamId}`,
+    { season_id: seasonId },
+  );
 }

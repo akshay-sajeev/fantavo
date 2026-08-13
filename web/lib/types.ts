@@ -331,3 +331,68 @@ export interface LineupOptimizerResponse {
   safest: LineupProjection;
   highest_upside: LineupProjection;
 }
+
+/**
+ * Mirrors sim.api.app.WaiverCandidateOut / sim.api.waiver_intelligence_view.WaiverCandidate.
+ * `percent_owned` / `percent_started` / `percent_change` / `average_draft_position`
+ * are ESPN's cross-league consensus ownership data (see
+ * `WaiverIntelligenceResponse.ownership_data_note`), already expressed on a
+ * 0-100 scale -- NOT a 0-1 fraction like `formatPercent` elsewhere in this
+ * app expects, so render these with `formatPercentPoints`, not
+ * `formatPercent`. `opportunity_score` / `start_rate_ratio` ARE 0-1
+ * fractions (`formatPercent` applies to those). `expected_playable_points =
+ * mean_points_per_game * opportunity_score` -- see that module's docstring
+ * for why this, not a bigger invented composite, ranks candidates within a
+ * position group.
+ */
+export interface WaiverCandidate {
+  player_id: number;
+  player_name: string;
+  injury_status: string | null;
+  mean_points_per_game: number;
+  /** games_projected / 17 -- a season-long games-missed forecast, distinct
+   * from opportunity_score's week-to-week role-trust signal. */
+  season_availability: number;
+  percent_owned: number;
+  percent_started: number;
+  percent_change: number;
+  average_draft_position: number | null;
+  start_rate_ratio: number;
+  opportunity_score: number;
+  expected_playable_points: number;
+  /** A real narrative synthesized server-side from this player's own
+   * Opportunity/Availability signals -- never computed or reworded in a
+   * component. */
+  reasoning: string;
+}
+
+/** Mirrors sim.api.app.WaiverPositionGroupOut. One position's worth of
+ * ranked free-agent candidates for one specific requesting team, plus the
+ * League fit / Competition facts -- position-level, not player-level, so
+ * they live here rather than repeated on every candidate. See
+ * sim.api.waiver_intelligence_view's module docstring, especially "Why this
+ * is grouped by position, not one flat list". `bench_depth_relevant` is
+ * false for K/D-ST: bench depth isn't a real roster decision at those two
+ * positions in this league (verified directly against the real fixture),
+ * so `team_has_positional_need`/`rival_teams_with_need` are always
+ * false/[] there rather than a fabricated need signal. */
+export interface WaiverPositionGroup {
+  position: string;
+  bench_depth_relevant: boolean;
+  team_bench_depth_at_position: number;
+  team_has_positional_need: boolean;
+  team_starters_at_position: string[];
+  rival_teams_with_need: string[];
+  group_reasoning: string;
+  candidates: WaiverCandidate[];
+}
+
+/** Mirrors sim.api.app.WaiverIntelligenceResponse. */
+export interface WaiverIntelligenceResponse {
+  league_id: number;
+  season_id: number;
+  team_id: number;
+  team_name: string;
+  ownership_data_note: string;
+  groups: WaiverPositionGroup[];
+}

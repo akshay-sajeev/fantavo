@@ -6,6 +6,15 @@ export function formatPercent(fraction: number, digits = 1): string {
   return `${(fraction * 100).toFixed(digits)}%`;
 }
 
+/** For a value already expressed on a 0-100 scale (e.g. ESPN's own
+ * `ownership.percentOwned`/`percentStarted`/`percentChange` figures) --
+ * unlike `formatPercent`, does NOT multiply by 100. Keeping these as two
+ * separate functions (rather than one with a `scale` flag) makes a call
+ * site's intent unambiguous at a glance. */
+export function formatPercentPoints(points: number, digits = 1): string {
+  return `${points.toFixed(digits)}%`;
+}
+
 /** A signed delta already expressed in percentage points (e.g. +4.2, -1.3) --
  * for what-if before/after comparisons, where the sign itself is the point. */
 export function formatSignedPoints(points: number, digits = 1): string {
