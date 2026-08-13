@@ -45,6 +45,14 @@ from pydantic import BaseModel, Field
 from ingest.db import DEFAULT_DEV_DSN, connect, dsn_from_env
 from ingest.errors import IngestError
 from sim.api.cache import read_cached_simulation, serialize_result
+from sim.api.draft_autopsy_view import (
+    DraftAutopsy,
+    DraftPickGrade,
+    PositionGrade,
+    PositionTiming,
+    TeamDraftAutopsy,
+    compute_draft_autopsy,
+)
 from sim.api.params_loader import LeagueNotIngestedError, load_league, resolve_season_id
 from sim.api.roster_view import RosterPlayer, TeamRosterView, load_team_rosters
 from sim.api.schedule_view import ScheduledMatchup, load_schedule
@@ -208,6 +216,74 @@ class SeasonReplayResponse(BaseModel):
     teams: list[SeasonReplayTeamOut]
 
 
+class DraftPickGradeOut(BaseModel):
+    """One real draft pick, graded against the specific same-position
+    alternative still on the board at that pick -- see
+    `sim.api.draft_autopsy_view.DraftPickGrade` for the exact meaning of
+    `value_gap` (positive = correct-process pick, negative = a reach past a
+    better-ranked alternative at the same position, zero with no alternative
+    id = nothing left in the tracked pool to compare against)."""
+
+    overall_pick_number: int
+    round_id: int
+    round_pick_number: int
+    team_id: int
+    team_name: str
+    player_id: int
+    player_name: str
+    position: str
+    slot_label: str
+    grade_bucket: str | None
+    player_rank: int
+    player_adp: float | None
+    alternative_player_id: int | None
+    alternative_player_name: str | None
+    alternative_player_rank: int | None
+    value_gap: float
+    best_overall_available_player_id: int | None
+    best_overall_available_player_name: str | None
+    best_overall_available_rank: int | None
+
+
+class PositionGradeOut(BaseModel):
+    position: str
+    pick_count: int
+    avg_value_gap: float
+    league_avg_value_gap: float
+    label: str
+
+
+class PositionTimingOut(BaseModel):
+    position: str
+    team_first_pick_number: int
+    team_first_pick_round: int
+    league_avg_first_pick_number: float
+    team_pick_count: int
+    team_avg_value_gap: float
+    league_avg_value_gap: float
+
+
+class TeamDraftAutopsyOut(BaseModel):
+    team_id: int
+    team_name: str
+    picks: list[DraftPickGradeOut]
+    best_pick: DraftPickGradeOut
+    worst_pick: DraftPickGradeOut
+    position_grades: list[PositionGradeOut]
+    position_timing: list[PositionTimingOut]
+    structural_finding: str
+
+
+class DraftAutopsyResponse(BaseModel):
+    league_id: int
+    season_id: int
+    # Human-readable label for the rank signal used throughout -- see
+    # sim.api.draft_autopsy_view's module docstring and docs/decisions.md
+    # Phase 7 for the full data-provenance reasoning.
+    rank_source: str
+    teams: list[TeamDraftAutopsyOut]
+
+
 def _to_roster_player_out(player: RosterPlayer) -> RosterPlayerOut:
     return RosterPlayerOut(
         player_id=player.player_id,
@@ -261,6 +337,74 @@ def _to_season_replay_team_out(team: TeamSeasonReplay) -> SeasonReplayTeamOut:
         neutral_expected_wins=team.neutral_expected_wins,
         neutral_expected_losses=team.neutral_expected_losses,
         neutral_expected_ties=team.neutral_expected_ties,
+    )
+
+
+def _to_draft_pick_grade_out(pick: DraftPickGrade) -> DraftPickGradeOut:
+    return DraftPickGradeOut(
+        overall_pick_number=pick.overall_pick_number,
+        round_id=pick.round_id,
+        round_pick_number=pick.round_pick_number,
+        team_id=pick.team_id,
+        team_name=pick.team_name,
+        player_id=pick.player_id,
+        player_name=pick.player_name,
+        position=pick.position,
+        slot_label=pick.slot_label,
+        grade_bucket=pick.grade_bucket,
+        player_rank=pick.player_rank,
+        player_adp=pick.player_adp,
+        alternative_player_id=pick.alternative_player_id,
+        alternative_player_name=pick.alternative_player_name,
+        alternative_player_rank=pick.alternative_player_rank,
+        value_gap=pick.value_gap,
+        best_overall_available_player_id=pick.best_overall_available_player_id,
+        best_overall_available_player_name=pick.best_overall_available_player_name,
+        best_overall_available_rank=pick.best_overall_available_rank,
+    )
+
+
+def _to_position_grade_out(grade: PositionGrade) -> PositionGradeOut:
+    return PositionGradeOut(
+        position=grade.position,
+        pick_count=grade.pick_count,
+        avg_value_gap=grade.avg_value_gap,
+        league_avg_value_gap=grade.league_avg_value_gap,
+        label=grade.label,
+    )
+
+
+def _to_position_timing_out(timing: PositionTiming) -> PositionTimingOut:
+    return PositionTimingOut(
+        position=timing.position,
+        team_first_pick_number=timing.team_first_pick_number,
+        team_first_pick_round=timing.team_first_pick_round,
+        league_avg_first_pick_number=timing.league_avg_first_pick_number,
+        team_pick_count=timing.team_pick_count,
+        team_avg_value_gap=timing.team_avg_value_gap,
+        league_avg_value_gap=timing.league_avg_value_gap,
+    )
+
+
+def _to_team_draft_autopsy_out(team: TeamDraftAutopsy) -> TeamDraftAutopsyOut:
+    return TeamDraftAutopsyOut(
+        team_id=team.team_id,
+        team_name=team.team_name,
+        picks=[_to_draft_pick_grade_out(p) for p in team.picks],
+        best_pick=_to_draft_pick_grade_out(team.best_pick),
+        worst_pick=_to_draft_pick_grade_out(team.worst_pick),
+        position_grades=[_to_position_grade_out(g) for g in team.position_grades],
+        position_timing=[_to_position_timing_out(t) for t in team.position_timing],
+        structural_finding=team.structural_finding,
+    )
+
+
+def _to_draft_autopsy_response(autopsy: DraftAutopsy) -> DraftAutopsyResponse:
+    return DraftAutopsyResponse(
+        league_id=autopsy.league_id,
+        season_id=autopsy.season_id,
+        rank_source=autopsy.rank_source,
+        teams=[_to_team_draft_autopsy_out(t) for t in autopsy.teams],
     )
 
 
@@ -458,3 +602,25 @@ def post_season_replay(
         seed=seed,
         teams=[_to_season_replay_team_out(t) for t in result.teams],
     )
+
+
+@app.get("/league/{league_id}/draft-autopsy", response_model=DraftAutopsyResponse)
+def get_draft_autopsy(
+    league_id: int,
+    season_id: int | None = None,
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> DraftAutopsyResponse:
+    """Per-pick draft grading -- see sim.api.draft_autopsy_view's module
+    docstring for the full methodology and the rank-source/data-provenance
+    reasoning. Raises 409 for a league with no completed draft to grade
+    (a pre-draft league, or the SYNTHETIC validation league, whose mock
+    draft never records a real pick sequence)."""
+    try:
+        resolved_season_id = resolve_season_id(conn, league_id, season_id)
+        autopsy = compute_draft_autopsy(conn, league_id, resolved_season_id)
+    except LeagueNotIngestedError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except _DATA_UNAVAILABLE_ERRORS as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return _to_draft_autopsy_response(autopsy)

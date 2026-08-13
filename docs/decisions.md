@@ -1015,3 +1015,177 @@ trigger before real drafted rosters existed anywhere in this codebase.
   are kept, not removed -- still the fastest way to get a fully-drafted,
   fully-projectable league for local dev/testing without needing a real
   draft, and Phase 4/5b/6's tests still depend on it.
+
+## Phase 7 — Draft Autopsy
+
+- **Data-provenance investigation (the highest-risk part of this phase, done
+  before writing any grading code), conclusion: the rank/ADP signal is an
+  acceptable, honest proxy, not a hindsight leak.** Confirmed directly
+  against the fixture: `draftDetail.completeDate` is 2026-08-05;
+  `ownership.date` on sampled players (both free agents and rostered) reads
+  ~2026-08-13, roughly 8 days later. Every `matchup.winner` in this league is
+  still `"UNDECIDED"` (documented repeatedly in earlier phases) -- zero
+  regular-season games have been played anywhere in this league's data, so
+  this rank/ADP data cannot be contaminated by the specific failure mode
+  PLAN.md warns against ("grade picks against players available at that
+  pick, not against final season outcomes"). The 8-day gap can only reflect
+  ordinary preseason drift (roster/depth-chart news, injury updates) --
+  exactly the kind of noise a live draft-day ADP feed absorbs constantly,
+  not a leak from games actually played. Concluded this is fine and
+  documented the reasoning in `sim/api/draft_autopsy_view.py`'s module
+  docstring rather than silently picking a rank source with no explanation.
+- **Rank source: `draftRanksByRankType["PPR"]["rank"]`**, not `STANDARD` or
+  `SUPERFLEX` (this league scores full PPR, established in Phase 1) and not
+  the messier per-source `rankings` block (many `rankSourceId`s per player,
+  built for positional expert-consensus display, not a single clean overall
+  order). Verified directly: all 428 players this fixture carries stats for
+  (300 free agents + 128 rostered, via `ingest.parse.every_player_with_stats`)
+  have a distinct, positive PPR rank -- zero missing, zero duplicates, zero
+  zero/null ranks -- so it is a genuine total order with no gaps to paper
+  over. `ownership.averageDraftPosition` is carried alongside on every graded
+  pick as `player_adp`, denominated in the same units as
+  `overallPickNumber`, purely as a secondary, display-only cross-check --
+  never used to decide a grade, an alternative, or a best/worst pick, so the
+  entire grading methodology rests on one documented, auditable source.
+- **"Value gap" (the core per-pick metric) is same-position, not
+  positionless.** For every pick, the alternative is the best-ranked player
+  at the *same* `defaultPositionId` label who was still undrafted at that
+  exact moment (excluding the player actually taken) -- not literally "the
+  single best player left on the board at any position." A positionless
+  comparison was considered and rejected: with 8 teams each required to
+  start exactly 1 QB/1 K/1 D-ST, a mandatory late positional fill would
+  almost always compare unfavorably against whatever RB/WR happened to be
+  sitting on the board at that pick, which would be a misleading "reach"
+  signal for a pick that was structurally necessary, not a mistake. Same-
+  position comparison answers a fair, actionable question instead: "given
+  you took this position here, did you take the best one available." The
+  literal best-available-anywhere player is still recorded on every pick
+  (`best_overall_available_*`) as informational context, just never used to
+  drive a grade.
+- **`value_gap = alternative_player_rank - player_rank` can be negative**,
+  and that is the intended, informative case (a better-ranked player at the
+  same position was passed over -- a reach), not a bug: an earlier draft of
+  this reasoning assumed the pool's best-remaining player is always *worse*
+  than what was taken, which is only true if every manager always drafts
+  in strict rank order -- exactly the behavior being graded, not something
+  to assume. Verified live against the real draft: pick #1 (Bijan Robinson,
+  rank 2) shows a small negative gap against Jahmyr Gibbs (rank 1, taken
+  next at pick #2) -- correctly flagged as a marginal, real reach rather
+  than silently treated as impossible.
+- **`grade_bucket` (QB/RB/WR/TE/Bench, PLAN.md's literal five categories)
+  is driven by the pick's own `lineupSlotId` at draft time** (0/2/4/6/20,
+  with FLEX (23) resolved to the taken player's own position), not by
+  where that player sits on the *current* roster. Verified this distinction
+  is load-bearing, not theoretical: cross-referencing all 128 picks against
+  today's rosters found 6 team mismatches (trades) and 4 picked players no
+  longer on any roster (waived, one case being a swapped D/ST placeholder
+  ID), all real roster churn between the 2026-08-05 draft and the fixture's
+  ~2026-08-13 fetch. Grading must reflect the pick that was actually made,
+  not later transaction activity a draft-grade has nothing to do with. K and
+  D/ST picks are graded per-pick (real `value_gap`, shown in the full draft
+  board) but excluded from the bucket summary, matching PLAN.md's literal
+  five-category list rather than inventing a sixth/seventh bucket it didn't
+  ask for.
+- **Best/worst decision are both driven by the same `value_gap` extremes**
+  (max for best, min for worst) -- deliberately not a blended score that
+  also folds in ADP-relative "steal" framing (`player_adp - overall_pick_number`,
+  a different, real, and initially-considered metric). PLAN.md's own phrase
+  --"the specific alternative that was on the board at that pick" -- demands
+  a named substitutable player attached to *both* the best and worst
+  callout, which only the same-position `value_gap` concept naturally
+  produces; an ADP-vs-pick-number score has no "alternative player" to name.
+  Combining the two into one composite number would need an arbitrary
+  relative weighting between "rank-spots" and "pick-number-spots" that isn't
+  fitted from anything -- exactly the class of invented constant CLAUDE.md's
+  "no invented numbers" rule warns against, even though this feature sits
+  entirely outside `simulate_seasons()`. Kept as two separate, individually
+  honest numbers instead: `value_gap` drives best/worst; `player_adp` is
+  supplementary context shown per pick.
+- **The structural finding is synthesized from real per-position facts, not
+  a template.** For each team and each of QB/RB/WR/TE (by the player's own
+  position label, bench picks included -- deliberately a different
+  aggregation than `grade_bucket`, since "RB depth" has to include bench
+  RBs to mean anything), `_synthesize_structural_finding` compares the
+  team's own first-pick-number and average `value_gap` at that position
+  against the league-wide average at the same position. A "you waited too
+  long" causal sentence is only produced when a position clears *both* an
+  explicit lateness threshold (>6 picks later than the league average first
+  pick) *and* a value threshold (>3 rank-spots worse than league average) --
+  requiring both signals together, not just one, so the sentence only fires
+  when timing plausibly explains the value lost, matching PLAN.md's own
+  example ("you waited too long on RB depth, which forced low-upside
+  options later") rather than making a causal claim off a single stat. A
+  second sentence names the team's best relative-value position for
+  balance. When no position clears both thresholds, a different, honest
+  fallback sentence fires instead (either naming the single weakest
+  position without a causal timing claim, or reporting that nothing stands
+  out) -- verified live against all 8 real teams: outputs ranged from
+  genuine "waited too long on WR/RB/TE" causal narratives to two teams
+  ("Milking the McCaffinator", the unnamed team `.`) whose picks were close
+  enough to league norms that the fallback "no single position stands out"
+  sentence fired correctly, confirming the logic doesn't force a dramatic
+  story where the data doesn't support one.
+- **`_GRADE_LABEL_THRESHOLD` / `_LATE_TIMING_THRESHOLD` / `_GAP_CAUSE_THRESHOLD`
+  are editorial thresholds for choosing display language over an
+  already-computed number**, the same class of choice as the existing
+  `TeamRiskCard.riskBand()` cutoffs (0.05 / 0.15) or `roster_view.py`'s
+  10th/90th floor/ceiling percentile choice -- not a fitted or invented
+  input to `simulate_seasons()`, and documented as such directly in
+  `sim/api/draft_autopsy_view.py` rather than left as unexplained magic
+  numbers.
+- **Backend module deliberately not vectorized with NumPy.** This is
+  discrete bookkeeping over a fixed, already-happened 128-pick sequence
+  (~55k worst-case comparisons), not a Monte Carlo simulation --
+  CLAUDE.md's "vectorize" rule targets `sim.engine`'s per-simulation arrays;
+  applying it here would obscure straightforward pick-by-pick logic for no
+  performance benefit at this scale. `sim/engine.py` and
+  `sim/tests/test_engine.py` were not touched by this phase.
+- **`compute_draft_autopsy` is split into a thin Postgres-loading wrapper and
+  a pure `_compute_from_raw(raw, league_id, season_id)`** so the grading
+  logic itself (10 of the phase's 15 new tests) can be exercised directly
+  against the in-memory fixture dict with no Postgres dependency, while a
+  separate small set of Postgres-backed tests covers the route and
+  `load_raw_payload` wiring -- mirroring the fast-unit-tests-plus-thin-
+  integration-tests split already implicit elsewhere in `sim/api`.
+- **New errors added to `ingest/errors.py`**: `DraftNotAvailableError`
+  (no `draftDetail.picks` to grade -- covers both a genuinely pre-draft
+  league and the SYNTHETIC validation league's picks-less mock draft) and
+  `MissingRankDataError` (a player needed for grading has no usable
+  `draftRanksByRankType.PPR.rank`). Both are `IngestError` subclasses, so
+  they fall through `sim/api/app.py`'s existing `_DATA_UNAVAILABLE_ERRORS`
+  → HTTP 409 mapping with zero changes to that tuple.
+- **UI: per-team report cards (structural finding → best/worst → positional
+  grades) lead the page; one shared full-league draft board table follows,
+  once, below all 8 cards** -- rather than repeating a 16-row pick table
+  inside every team card. This is the concrete implementation of PLAN.md's
+  "structural narrative given more weight... not buried below a wall of
+  per-pick data": the narrative is the first, largest element in every
+  card, and the exhaustive per-pick view exists exactly once, after every
+  team's synthesis has already been read. Matches the whole-league-at-once
+  pattern every other page in this app already uses (Roster Risk, Power
+  Rankings) rather than introducing a new team-selector/tabs pattern this
+  app has never used.
+- **Draft board grid values are always visible directly on each cell**
+  (player name, position/slot, pick number, signed value_gap), never
+  hover-only -- per MASTER.md's own chart accessibility guidance ("value
+  labels always visible on each bar, not hover-only"). No tooltip-based
+  interactivity was added to the grid for this reason, and because
+  hover-only content degrades badly on the touch-only mobile layout this
+  app is explicitly built for.
+- **Verification**: `pytest -q` 138 passed (128 from Phases 0-6 plus 10 new
+  in `sim/tests/test_api_draft_autopsy.py`); `mypy --strict sim ingest` 21
+  pre-existing errors (0 new); `ruff check sim ingest db scripts` shows only
+  the same pre-existing findings in files this phase didn't touch (0 new).
+  Web: `tsc --noEmit`, `eslint .`, and `npm run build` (production) all
+  clean. Visually verified in a real browser (uvicorn + Next.js dev server,
+  both against the real league, `league_id=885686492`) at 375px mobile and
+  1440px desktop: all 8 teams' structural findings, best/worst decision
+  callouts (with the named alternative and signed value gap), positional
+  grade strips, and the full 128-pick draft board grid render correctly;
+  confirmed `document.documentElement.scrollWidth === window.innerWidth` at
+  375px (no page-level horizontal scroll) while the draft board table's own
+  wrapper legitimately scrolls horizontally within itself
+  (`scrollWidth: 1403px` vs `clientWidth: 311px`); confirmed the SYNTHETIC
+  league (`league_id=-1990001`) renders a clean, readable 409 panel instead
+  of a crash or blank page, since its mock draft has no pick sequence to
+  grade.

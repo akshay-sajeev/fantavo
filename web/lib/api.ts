@@ -1,5 +1,6 @@
 import "server-only";
 import type {
+  DraftAutopsyResponse,
   RosterResponse,
   ScheduleResponse,
   SeasonReplayResponse,
@@ -136,4 +137,16 @@ export function postSeasonReplay(
   body: { season_id?: number; seed?: number },
 ): Promise<SeasonReplayResponse> {
   return postJson<SeasonReplayResponse>(`/league/${leagueId}/whatif/season-replay`, body);
+}
+
+/** GET /league/{id}/draft-autopsy -- see sim.api.draft_autopsy_view for the
+ * full grading methodology. 409s for a league with no completed draft to
+ * grade (a pre-draft league, or the SYNTHETIC validation league). */
+export function getDraftAutopsy(
+  leagueId: number,
+  seasonId?: number,
+): Promise<DraftAutopsyResponse> {
+  return getJson<DraftAutopsyResponse>(`/league/${leagueId}/draft-autopsy`, {
+    season_id: seasonId,
+  });
 }

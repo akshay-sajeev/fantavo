@@ -124,3 +124,81 @@ export interface SeasonReplayResponse {
   note: string;
   teams: SeasonReplayTeam[];
 }
+
+/**
+ * Mirrors sim.api.app.DraftPickGradeOut / sim.api.draft_autopsy_view.DraftPickGrade
+ * field-for-field. `value_gap = alternative_player_rank - player_rank` when
+ * an alternative existed: positive means the player taken was ranked BETTER
+ * than the best same-position alternative left on the board (a
+ * correct-process pick); negative means a better-ranked alternative at the
+ * same position was passed over (a reach). Zero with `alternative_player_id
+ * === null` means no alternative existed in the tracked player pool at that
+ * point in the draft -- not graded either way.
+ */
+export interface DraftPickGrade {
+  overall_pick_number: number;
+  round_id: number;
+  round_pick_number: number;
+  team_id: number;
+  team_name: string;
+  player_id: number;
+  player_name: string;
+  position: string;
+  slot_label: string;
+  /** One of "QB" | "RB" | "WR" | "TE" | "Bench", or null for a K/D-ST pick
+   * -- see sim.api.draft_autopsy_view's module docstring for why K/D-ST are
+   * excluded from the positional-strategy-grade summary. */
+  grade_bucket: string | null;
+  player_rank: number;
+  player_adp: number | null;
+  alternative_player_id: number | null;
+  alternative_player_name: string | null;
+  alternative_player_rank: number | null;
+  value_gap: number;
+  best_overall_available_player_id: number | null;
+  best_overall_available_player_name: string | null;
+  best_overall_available_rank: number | null;
+}
+
+export interface PositionGrade {
+  position: string;
+  pick_count: number;
+  avg_value_gap: number;
+  league_avg_value_gap: number;
+  label: string;
+}
+
+export interface PositionTiming {
+  position: string;
+  team_first_pick_number: number;
+  team_first_pick_round: number;
+  league_avg_first_pick_number: number;
+  team_pick_count: number;
+  team_avg_value_gap: number;
+  league_avg_value_gap: number;
+}
+
+export interface TeamDraftAutopsy {
+  team_id: number;
+  team_name: string;
+  picks: DraftPickGrade[];
+  best_pick: DraftPickGrade;
+  worst_pick: DraftPickGrade;
+  position_grades: PositionGrade[];
+  position_timing: PositionTiming[];
+  /** A real narrative synthesized server-side from this team's own
+   * pick-level data -- never computed or reworded in a component, per
+   * CLAUDE.md's "no analytics logic in components" rule. */
+  structural_finding: string;
+}
+
+/** Mirrors sim.api.app.DraftAutopsyResponse. */
+export interface DraftAutopsyResponse {
+  league_id: number;
+  season_id: number;
+  /** Human-readable label for the rank signal used throughout -- see
+   * sim.api.draft_autopsy_view's module docstring and docs/decisions.md
+   * Phase 7 for the full data-provenance reasoning. */
+  rank_source: string;
+  teams: TeamDraftAutopsy[];
+}
