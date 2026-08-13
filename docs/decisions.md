@@ -1554,3 +1554,51 @@ Weekly recap is a separate future session, per PLAN.md's "three separate session
   content (verified the K/D-ST "streaming options" section and the TE "real need" section this way),
   confirming a tooling artifact rather than an app bug, the same conclusion reached under the same symptom
   in both prior phases.
+
+## Phase 9c — Weekly recap: deferred, not built
+
+PLAN.md scopes Phase 9 as three separate sub-features. Lineup optimizer (9a) and
+Waiver intelligence (9b) are both done (see above). Weekly recap (9c) is **not**
+built, and this is a deliberate deferral, not an oversight or a skipped task.
+
+**Why:** every one of Weekly recap's required outputs -- biggest winner/loser,
+luckiest/unluckiest team (comparing each team's actual score that week against
+every other team's actual score), performance of the week, biggest waiver impact
+-- is defined entirely in terms of a week that has *actually been played*. The
+real league (league_id=885686492) has zero games played anywhere; `matchup.winner`
+is `UNDECIDED` for every regular-season matchup. There is no honest way to recap a
+week that has not happened.
+
+This is a structurally different situation from every earlier "pre-season" blocker
+this project has hit and resolved with synthetic/prospective data:
+- Draft Autopsy (Phase 7) needed a real *draft*, which had already happened by the
+  time that phase ran -- no synthetic stand-in was needed at all once the league
+  drafted.
+- Playoff Planner (Phase 8), Lineup optimizer (Phase 9a), and Beat My League
+  (Phase 10, if scoped similarly) are all legitimately *prospective* -- "what does
+  simulate_seasons() project," not "what already happened." A pre-season answer to
+  a forward-looking question is still an honest answer to that question.
+- Season replay's alternate-lineup/schedule-neutrality what-ifs (Phase 6) do use
+  one sampled "synthetic actual season" -- but that tool's entire framing is an
+  explicit hypothetical ("what if a season like this happened"), labeled
+  SYNTHETIC everywhere it surfaces, and the user reading it already knows they are
+  looking at a constructed scenario, not news.
+
+Weekly recap is different in kind: PLAN.md's own description calls it "the
+retention feature -- it should be worth opening on a Tuesday morning." Its entire
+value proposition is being genuine, factual news about what actually happened in
+the user's actual league. Fabricating a "recap" from a sampled realization --
+even clearly labeled SYNTHETIC -- would not produce a usable version of this
+feature; it would produce a plausible-sounding lie about a game that was never
+played, in a feature specifically designed to be trusted at a glance on a Tuesday
+morning. That is a materially worse failure mode than an honestly-labeled
+what-if tool, and building it would undermine the entire point of the feature
+rather than deliver a reduced-scope version of it.
+
+**Resolution:** deferred, alongside Fantasy Lab and draft replay (see PLAN.md's
+"Deferred by choice" section) -- not abandoned, just correctly sequenced after
+real games exist to recap. Revisit once `matchup.winner` is no longer
+`UNDECIDED` for at least one real week (Phase 3's schema and Phase 5b's
+`schedule_view.load_schedule` already track this and will surface it via
+`current_week` the moment it's true). No code was written for this sub-feature;
+nothing here needs undoing when that day comes.
