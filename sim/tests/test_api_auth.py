@@ -10,12 +10,17 @@ pattern this reuses).
 
 from __future__ import annotations
 
+import os
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import psycopg
 import pytest
+from fastapi.testclient import TestClient
 
+from ingest.db import DEFAULT_TEST_DSN
+from sim.api import app as app_module
 from sim.api.auth_view import (
     THROTTLE_MAX_FAILURES,
     AccountLockedError,
@@ -31,6 +36,18 @@ from sim.api.auth_view import (
     validate_session,
     verify_password,
 )
+
+TEST_DSN = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DSN)
+
+
+@pytest.fixture()
+def client(
+    pg_conn: psycopg.Connection[Any], monkeypatch: pytest.MonkeyPatch
+) -> Iterator[TestClient]:
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+    monkeypatch.setattr(app_module, "start_scheduler", lambda dsn=None: None)
+    with TestClient(app_module.app) as test_client:
+        yield test_client
 
 
 def test_normalize_email_lowercases_and_trims() -> None:
@@ -195,3 +212,132 @@ def test_successful_login_clears_the_failure_count(pg_conn: psycopg.Connection[A
     # And the count is now reset, so a single subsequent failure doesn't lock:
     with pytest.raises(InvalidCredentialsError):
         authenticate_user(pg_conn, "recovers@example.com", "wrong", FIXED_NOW)
+
+
+def test_signup_then_login_returns_a_working_token(client: TestClient) -> None:
+    signup_res = client.post(
+        "/auth/signup", json={"email": "http@example.com", "password": "a-real-password"}
+    )
+    assert signup_res.status_code == 201
+    signup_token = signup_res.json()["token"]
+
+    me_res = client.get("/auth/me", headers={"Authorization": f"Bearer {signup_token}"})
+    assert me_res.status_code == 200
+    assert me_res.json()["email"] == "http@example.com"
+
+    login_res = client.post(
+        "/auth/login", json={"email": "http@example.com", "password": "a-real-password"}
+    )
+    assert login_res.status_code == 200
+    login_token = login_res.json()["token"]
+    assert login_token != signup_token  # a fresh session, not the same one
+
+
+def test_signup_duplicate_email_and_login_wrong_password_give_identical_errors(
+    client: TestClient,
+) -> None:
+    client.post("/auth/signup", json={"email": "dupe@example.com", "password": "a-real-password"})
+
+    dup_res = client.post(
+        "/auth/signup", json={"email": "dupe@example.com", "password": "a-different-password"}
+    )
+    wrong_pw_res = client.post(
+        "/auth/login", json={"email": "dupe@example.com", "password": "totally-wrong"}
+    )
+    unknown_res = client.post(
+        "/auth/login", json={"email": "never-signed-up@example.com", "password": "whatever"}
+    )
+
+    assert dup_res.status_code == 400
+    assert wrong_pw_res.status_code == 401
+    assert unknown_res.status_code == 401
+    assert dup_res.json()["detail"] == wrong_pw_res.json()["detail"] == unknown_res.json()["detail"]
+
+
+def test_me_rejects_missing_and_garbage_tokens(client: TestClient) -> None:
+    assert client.get("/auth/me").status_code == 401
+    assert client.get("/auth/me", headers={"Authorization": "Bearer garbage"}).status_code == 401
+    assert client.get("/auth/me", headers={"Authorization": "not-even-bearer-shaped"}).status_code == 401
+
+
+def test_me_rejects_an_expired_token_over_http(
+    client: TestClient, pg_conn: psycopg.Connection[Any]
+) -> None:
+    """Creates the session directly against auth_view (not through the HTTP
+    signup route) using FIXED_NOW (2026-06-01) -- already well over
+    SESSION_LIFETIME_DAYS (30 days) in the past relative to real wall-clock
+    time, so the token is naturally already-expired by the time the real
+    /auth/me route (which reads the real clock) validates it. No need to
+    mock datetime.now() to get a genuinely expired token through the actual
+    HTTP path.
+
+    pg_conn.commit() is required after each write here: pg_conn holds its
+    own open transaction (autocommit=False, per the fixture), and `client`'s
+    requests each run on their own fresh connection via get_connection --
+    that connection can only see what pg_conn has actually committed. Same
+    pattern sim/tests/conftest.py's own synthetic_league_id fixture already
+    uses (ingest_league(pg_conn, ...) then pg_conn.commit()).
+    """
+    user = create_user(pg_conn, "expiredhttp@example.com", "a-real-password", FIXED_NOW)
+    pg_conn.commit()
+    token = create_session(pg_conn, user, FIXED_NOW)
+    pg_conn.commit()
+
+    me_res = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert me_res.status_code == 401
+
+
+def test_logout_then_me_is_401(client: TestClient) -> None:
+    signup_res = client.post(
+        "/auth/signup", json={"email": "logsout@example.com", "password": "a-real-password"}
+    )
+    token = signup_res.json()["token"]
+
+    logout_res = client.post("/auth/logout", headers={"Authorization": f"Bearer {token}"})
+    assert logout_res.status_code == 204
+
+    me_res = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert me_res.status_code == 401
+
+
+def test_logout_is_idempotent_over_http(client: TestClient) -> None:
+    res = client.post("/auth/logout", headers={"Authorization": "Bearer never-issued"})
+    assert res.status_code == 204
+
+
+def test_login_returns_429_after_five_failures_and_never_leaks_over_http(
+    client: TestClient,
+) -> None:
+    client.post(
+        "/auth/signup", json={"email": "httplocked@example.com", "password": "the-real-password"}
+    )
+    for _ in range(5):
+        res = client.post(
+            "/auth/login", json={"email": "httplocked@example.com", "password": "wrong"}
+        )
+        assert res.status_code == 401
+    locked_res = client.post(
+        "/auth/login",
+        json={"email": "httplocked@example.com", "password": "the-real-password"},
+    )
+    assert locked_res.status_code == 429
+
+
+def test_no_plaintext_password_or_raw_token_ever_lands_in_the_database(
+    client: TestClient, pg_conn: psycopg.Connection[Any]
+) -> None:
+    password = "a-very-specific-secret-password-xyz"
+    signup_res = client.post(
+        "/auth/signup", json={"email": "secretcheck@example.com", "password": password}
+    )
+    token = signup_res.json()["token"]
+
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT password_hash FROM app_user")
+        password_rows = cur.fetchall()
+        cur.execute("SELECT token_hash FROM user_session")
+        session_rows = cur.fetchall()
+
+    assert not any(password in row[0] for row in password_rows)
+    assert not any(token in row[0] for row in session_rows)
+    assert not any(token == row[0] for row in session_rows)

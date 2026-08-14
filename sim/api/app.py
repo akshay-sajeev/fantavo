@@ -49,11 +49,12 @@ from typing import Any
 
 import numpy as np
 import psycopg
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from ingest.db import DEFAULT_DEV_DSN, connect, dsn_from_env
 from ingest.errors import IngestError
+from sim.api import auth_view
 from sim.api.analyst_tools import UnknownAnalystTeamError
 from sim.api.analyst_view import (
     AnalystConfigError,
@@ -1061,6 +1062,27 @@ def _to_response(
     )
 
 
+class SignupRequest(BaseModel):
+    email: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class AuthResponseOut(BaseModel):
+    token: str
+    user_id: int
+    email: str
+
+
+class MeResponseOut(BaseModel):
+    user_id: int
+    email: str
+
+
 _scheduler: Any = None
 
 
@@ -1084,11 +1106,104 @@ def get_dsn() -> str:
 
 
 def get_connection(dsn: str = Depends(get_dsn)) -> Iterator[psycopg.Connection[Any]]:
+    """`connect()` returns an autocommit=False connection (see its
+    docstring), and every read here previously left that fine for the
+    read-only routes above -- nothing needed committing. The 4 /auth/*
+    routes are the first writes through this dependency, and they expose a
+    real gap: a bare, unwrapped `cur.execute()` read (e.g.
+    auth_view._raise_if_locked's SELECT) opens an ambient transaction on
+    this connection, so a *later* `with conn.transaction():` write in the
+    same request (e.g. auth_view._record_failed_login's INSERT, or
+    create_session's own INSERT right after a successful login) becomes a
+    SAVEPOINT nested inside that still-open ambient transaction rather than
+    a top-level commit -- see psycopg's docs on Connection.transaction()
+    nesting. Nothing ever commits that outer transaction, so it silently
+    rolls back on conn.close() below, and the write never reaches the
+    database even though the route returned 200/201/401/429 as if it had.
+    Committing unconditionally in `finally` (so it still runs when a route
+    raises HTTPException -- e.g. login's 401 after auth_view already wrote
+    the failed-attempt row, or its 429 after the 5th) closes that gap for
+    every route, present and future, without changing any read-only
+    route's behavior (committing a read-only transaction is a no-op)."""
     conn = connect(dsn)
     try:
         yield conn
     finally:
+        conn.commit()
         conn.close()
+
+
+# The same generic text for every one of: signup with an email that's
+# already registered, login with an email that has no account, login with
+# the wrong password. None of the three may be distinguishable -- see
+# auth_view.EmailAlreadyRegisteredError's docstring.
+_GENERIC_AUTH_ERROR = "invalid email or password"
+
+
+def get_bearer_token(authorization: str | None = Header(default=None)) -> str:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="missing or malformed Authorization header")
+    return authorization.removeprefix("Bearer ").strip()
+
+
+def require_user(
+    token: str = Depends(get_bearer_token),
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> auth_view.AuthedUser:
+    """Validates the bearer token against a real, non-expired session.
+    Not yet attached to any league route in Phase A -- Phase B attaches
+    this to per-league authorization."""
+    try:
+        return auth_view.validate_session(conn, token, datetime.now(UTC))
+    except auth_view.InvalidSessionError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
+@app.post("/auth/signup", response_model=AuthResponseOut, status_code=201)
+def signup(
+    body: SignupRequest,
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> AuthResponseOut:
+    now = datetime.now(UTC)
+    try:
+        user = auth_view.create_user(conn, body.email, body.password, now)
+    except auth_view.EmailAlreadyRegisteredError as exc:
+        raise HTTPException(status_code=400, detail=_GENERIC_AUTH_ERROR) from exc
+    except ValueError as exc:
+        # A too-short password or malformed email -- safe to show verbatim,
+        # neither leaks anything about other accounts.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    token = auth_view.create_session(conn, user, now)
+    return AuthResponseOut(token=token, user_id=user.user_id, email=user.email)
+
+
+@app.post("/auth/login", response_model=AuthResponseOut)
+def login(
+    body: LoginRequest,
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> AuthResponseOut:
+    now = datetime.now(UTC)
+    try:
+        user = auth_view.authenticate_user(conn, body.email, body.password, now)
+    except auth_view.AccountLockedError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except auth_view.InvalidCredentialsError as exc:
+        raise HTTPException(status_code=401, detail=_GENERIC_AUTH_ERROR) from exc
+    token = auth_view.create_session(conn, user, now)
+    return AuthResponseOut(token=token, user_id=user.user_id, email=user.email)
+
+
+@app.post("/auth/logout", status_code=204)
+def logout(
+    token: str = Depends(get_bearer_token),
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> None:
+    auth_view.delete_session(conn, token)
+
+
+@app.get("/auth/me", response_model=MeResponseOut)
+def me(user: auth_view.AuthedUser = Depends(require_user)) -> MeResponseOut:  # noqa: B008 (idiomatic FastAPI)
+    return MeResponseOut(user_id=user.user_id, email=user.email)
 
 
 @app.get("/league/{league_id}/simulation", response_model=SimulationResponse)
