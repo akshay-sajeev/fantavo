@@ -599,7 +599,13 @@ def test_delete_session_invalidates_it_immediately(pg_conn: psycopg.Connection[A
 
 
 def test_delete_session_is_idempotent(pg_conn: psycopg.Connection[Any]) -> None:
-    delete_session(pg_conn, "a-token-that-was-never-issued")  # must not raise
+    # No explicit assertion beyond "does not raise" -- pytest already fails
+    # this test if delete_session raises, which is the actual claim being
+    # tested (deleting a token that was never issued, or is already gone,
+    # must not be an error). Calling it twice proves the second call is
+    # exactly as safe as the first -- the literal meaning of "idempotent."
+    delete_session(pg_conn, "a-token-that-was-never-issued")
+    delete_session(pg_conn, "a-token-that-was-never-issued")
 
 
 def test_create_session_token_is_never_stored_raw(pg_conn: psycopg.Connection[Any]) -> None:
