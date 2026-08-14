@@ -3,6 +3,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { TiltCard } from "@/components/ui/motion";
+import { MatchupRow } from "@/components/dashboard/matchup-row";
 import type { ScheduleResponse } from "@/lib/types";
 
 /**
@@ -43,13 +44,8 @@ export function CurrentMatchupCard({ schedule }: { schedule: ScheduleResponse })
           ) : (
             <ul className="divide-y divide-border">
               {matchups.map((m) => (
-                <li
-                  key={`${m.home_team_id}-${m.away_team_id}`}
-                  className="flex items-center justify-between gap-3 py-2 text-sm"
-                >
-                  <span className="font-medium">{m.home_team_name ?? "TBD"}</span>
-                  <span className="text-xs text-muted-foreground">vs</span>
-                  <span className="text-right font-medium">{m.away_team_name ?? "TBD"}</span>
+                <li key={`${m.home_team_id}-${m.away_team_id}`} className="py-2 text-sm">
+                  <MatchupRow homeTeamName={m.home_team_name} awayTeamName={m.away_team_name} />
                 </li>
               ))}
             </ul>
