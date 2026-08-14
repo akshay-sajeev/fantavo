@@ -2300,3 +2300,61 @@ sub-feature; nothing needs undoing when that day comes.
   from 0 to their real values, `prefers-reduced-motion` disables all of the
   above (instant, static rendering), and no page-level horizontal scroll at
   375px.
+
+## Phase 15 — Dashboard layout & visual hierarchy cleanup
+
+- **Two numbers the dashboard could plausibly want were checked against the
+  sim API during brainstorming and explicitly rejected rather than
+  fabricated, per CLAUDE.md's "no invented numbers" rule.** No per-matchup
+  win probability exists anywhere in `sim/api` -- only season-long title
+  odds / playoff odds come out of `simulate_seasons()`, and there is no
+  cheap, honest way to turn those into "team A beats team B this week"
+  without a second, unsanctioned simulation path. The hero matchup row and
+  the new week-selector card both show a plain "VS" pill instead. Likewise,
+  no "Roster Grade" exists anywhere in the data model -- Draft Autopsy
+  (Phase 9) grades individual draft *picks* against alternatives available
+  at the time, not overall current roster strength, and the two are not
+  interchangeable. Roster cards show Star Player and Proj. Pts/Wk only, no
+  grade of any kind.
+- **Star Player and Proj. Pts/Wk are computed client-side, in
+  `web/components/dashboard/rosters-grid.tsx` (a React Server Component) --
+  a deliberate, narrow reading of CLAUDE.md's "no analytics logic in React
+  components" rule, worth stating plainly rather than leaving implicit.**
+  `sim/api/roster_view.py`'s own module docstring explains it keeps the
+  team-level `risk_rating` rollup server-side specifically so "the frontend
+  only ever renders it," and `_team_risk_rating` already computes
+  `total_mean = sum(means)` over exactly the same starters as part of that
+  formula -- so this card's `Proj. Pts/Wk` duplicates a sum that already
+  exists one layer down in the API, just not exposed as its own field. What
+  ships here is selection (max by `mean`) and summation over per-player
+  numbers the roster API already returns and the user can already see
+  individually in the "View Full Roster" disclosure -- not a new model, not
+  a derived statistic. That is judged in-bounds, but it is a narrower
+  reading than Phase 14's `roster_view.py` precedent used, and the clean
+  long-term fix if this pattern spreads further is to expose a
+  `starters_mean_total` (or similarly named) field on the roster API
+  response and stop computing it twice.
+- **Fixed the "VS" alignment bug** where a long team name on one side of a
+  matchup row pushed the centered indicator off-center. Extracted a shared
+  `MatchupRow` component (`grid-cols-[1fr_auto_1fr]`, with `truncate` and
+  `min-w-0` on each team-name cell so a long name clips instead of pushing
+  layout) and reused it from both the existing hero `CurrentMatchupCard`
+  and the new `WeekMatchupsCard`, rather than fixing the alignment in one
+  place and leaving the other's markup to drift.
+- **First `Select` primitive in the codebase** (`web/components/ui/select.tsx`,
+  wrapping `@base-ui/react/select`), added to back a week-by-week matchup
+  picker (`web/components/dashboard/week-matchups-card.tsx`) that replaces
+  the old static "Remaining schedule" list.
+- **Verification**: `cd web && npx tsc --noEmit`, `npx eslint .`, and
+  `npm run build` all clean. Live-verified in a real browser (Next dev
+  server + sim API) against the real fixture league (`league_id=885686492`,
+  no synthetic data): matchup rows stay aligned with real, non-fabricated
+  long-ish team names; the Standings info pill, tooltip, and rank badges
+  render correctly; roster cards show real Star Player / Proj. Pts/Wk
+  values and the "View Full Roster" disclosure expands and collapses via
+  both mouse and keyboard; the week selector's `data-*` attributes were
+  checked against the live DOM while genuinely open (`data-popup-open` on
+  the trigger, `data-open` on the popup -- matching what was implemented,
+  no correction needed) and selecting a different week correctly swapped in
+  that week's real matchups, cross-checked against the underlying schedule
+  data; confirmed no horizontal scroll at 375px.

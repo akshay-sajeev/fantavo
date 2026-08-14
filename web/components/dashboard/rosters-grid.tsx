@@ -5,10 +5,11 @@ import type { RosterPlayer, TeamRoster } from "@/lib/types";
 
 /**
  * Compact per-team roster listing for the dashboard overview. Star Player
- * (highest-projected starter) and Proj. Points (sum of starters' mean
- * projections) are simple selection/summation over per-player numbers the
- * roster API already returns -- never a new modeled number, and never a
- * "Roster Grade" (no such rating exists anywhere in this app's data model).
+ * (highest-projected starter) and Proj. Pts/Wk (sum of starters' per-game
+ * mean projections -- a one-week total, not a season total) are simple
+ * selection/summation over per-player numbers the roster API already
+ * returns -- never a new modeled number, and never a "Roster Grade" (no
+ * such rating exists anywhere in this app's data model).
  * Availability/floor/ceiling/risk still live on the dedicated Risk panel
  * (/risk), not duplicated here.
  *
@@ -57,7 +58,7 @@ export function RostersGrid({ teams }: { teams: TeamRoster[] }) {
                   ) : null}
                   {eligible.length > 0 ? (
                     <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">Proj. Points</span>
+                      <span className="text-muted-foreground">Proj. Pts/Wk</span>
                       <span className="font-medium tabular-nums">
                         {formatPoints(projectedPoints)}
                       </span>
