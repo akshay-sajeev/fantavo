@@ -30,9 +30,18 @@ from scripts.ingest_synthetic_league import SYNTHETIC_LEAGUE_ID, build_synthetic
 TEST_DSN = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DSN)
 FIXTURE_PATH = FIXTURES_DIR / "league_raw_2026.json"
 
-# simulation_cache isn't in ingest.db.DATA_TABLES (it's Phase 4's own table,
-# not part of ingest's normalized sync), so it's truncated alongside it here.
-_ALL_TABLES: tuple[str, ...] = (*DATA_TABLES, "simulation_cache")
+# simulation_cache and the 3 auth tables aren't in ingest.db.DATA_TABLES
+# (none of them are written by an ingest run), so they're truncated
+# alongside it here. The auth tables specifically need this: without it,
+# a duplicate-email test in one test function would collide with a
+# same-email signup in another.
+_ALL_TABLES: tuple[str, ...] = (
+    *DATA_TABLES,
+    "simulation_cache",
+    "app_user",
+    "user_session",
+    "login_throttle",
+)
 
 # A fixed instant, never datetime.now() -- see ingest/db.py and
 # ingest/tests/test_db.py for why deterministic timestamps matter for

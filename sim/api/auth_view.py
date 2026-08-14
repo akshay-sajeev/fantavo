@@ -19,7 +19,10 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
 
+import psycopg
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
@@ -96,3 +99,44 @@ def _hash_token(token: str) -> str:
     """sha256 of a session token -- see user_session.token_hash's docstring
     in the migration for why the raw token itself is never stored."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _validate_email_format(email: str) -> None:
+    if "@" not in email or len(email.strip()) < 3:
+        raise ValueError("that doesn't look like a valid email address")
+
+
+def create_user(
+    conn: psycopg.Connection[Any], email: str, password: str, created_at: datetime
+) -> AuthedUser:
+    """Creates a new account. Raises a plain ValueError for a too-short
+    password or malformed email (safe to show verbatim -- neither leaks
+    anything about other accounts), and EmailAlreadyRegisteredError for a
+    duplicate email (which the route handler in sim.api.app deliberately
+    does NOT show verbatim -- see that exception's own docstring)."""
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"password must be at least {MIN_PASSWORD_LENGTH} characters")
+    _validate_email_format(email)
+
+    email_norm = normalize_email(email)
+    password_hash = hash_password(password)
+
+    with conn.transaction(), conn.cursor() as cur:
+        try:
+            cur.execute(
+                """
+                INSERT INTO app_user (email, email_norm, password_hash, created_at)
+                VALUES (%s, %s, %s, %s)
+                RETURNING user_id
+                """,
+                (email, email_norm, password_hash, created_at),
+            )
+        except psycopg.errors.UniqueViolation as exc:
+            raise EmailAlreadyRegisteredError(
+                "an account with this email already exists"
+            ) from exc
+        row = cur.fetchone()
+        assert row is not None
+        user_id: int = row[0]
+
+    return AuthedUser(user_id=user_id, email=email)
