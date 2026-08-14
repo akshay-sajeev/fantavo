@@ -9,6 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AnimatedMeter, revealContainerVariants, revealItemVariants } from "@/components/ui/motion";
 import { formatPercent, formatWins } from "@/lib/format";
 import { tallyActualRecords, totalGamesPlayed } from "@/lib/standings";
@@ -55,15 +56,21 @@ export function StandingsTable({
   return (
     <div className="space-y-3">
       {gamesPlayed === 0 ? (
-        <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/60 p-3 text-sm text-muted-foreground">
-          <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-          <p>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span className="inline-flex w-fit cursor-default items-center gap-1.5 rounded-full border border-border/70 bg-muted/60 px-2.5 py-1 text-xs text-muted-foreground" />
+            }
+          >
+            <Info className="h-3.5 w-3.5" aria-hidden="true" />
+            {simulation.n_sims.toLocaleString()} simulations
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
             No games have been played yet this season
             {schedule.current_week ? ` — Week ${schedule.current_week} is upcoming` : ""}. The
-            standings below are simulated projections ({simulation.n_sims.toLocaleString()}{" "}
-            simulated seasons), not an actual win-loss record.
-          </p>
-        </div>
+            standings below are simulated projections, not an actual win-loss record.
+          </TooltipContent>
+        </Tooltip>
       ) : null}
 
       <div className="overflow-x-auto rounded-lg border border-border">
@@ -103,7 +110,23 @@ export function StandingsTable({
                   )}
                 >
                   <TableCell className="tabular-nums text-muted-foreground">
-                    {projectedRank + 1}
+                    {projectedRank < 3 ? (
+                      <span
+                        className={cn(
+                          "inline-flex h-6 w-6 items-center justify-center rounded-full border text-xs font-bold",
+                          projectedRank === 0 &&
+                            "border-[#FFD700]/40 bg-[#FFD700]/15 text-[#FFD700]",
+                          projectedRank === 1 &&
+                            "border-[#C0C0C0]/40 bg-[#C0C0C0]/15 text-[#C0C0C0]",
+                          projectedRank === 2 &&
+                            "border-[#CD7A2D]/40 bg-[#CD7A2D]/15 text-[#CD7A2D]"
+                        )}
+                      >
+                        {projectedRank + 1}
+                      </span>
+                    ) : (
+                      projectedRank + 1
+                    )}
                   </TableCell>
                   <TableCell className="font-medium">{team.team_name}</TableCell>
                   <TableCell className="text-right tabular-nums">
