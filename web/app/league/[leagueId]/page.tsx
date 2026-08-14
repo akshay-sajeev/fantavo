@@ -2,7 +2,7 @@ import { getRoster, getSchedule, getSimulation } from "@/lib/api";
 import { ApiErrorPanel } from "@/components/shared/api-error-panel";
 import { StandingsTable } from "@/components/dashboard/standings-table";
 import { CurrentMatchupCard } from "@/components/dashboard/current-matchup-card";
-import { RemainingScheduleTable } from "@/components/dashboard/remaining-schedule-table";
+import { WeekMatchupsCard } from "@/components/dashboard/week-matchups-card";
 import { RostersGrid } from "@/components/dashboard/rosters-grid";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Reveal, RevealItem } from "@/components/ui/motion";
@@ -61,7 +61,7 @@ export default async function DashboardPage({
           <RostersGrid teams={roster.teams} />
         </RevealItem>
         <RevealItem>
-          <RemainingScheduleTable schedule={schedule} />
+          <WeekMatchupsCard schedule={schedule} />
         </RevealItem>
       </Reveal>
     </div>
