@@ -15,13 +15,19 @@ import type { ScheduleResponse } from "@/lib/types";
  * matchup is already decided, current_week is null and this renders a
  * "season complete" state instead of guessing a week number.
  */
-export function CurrentMatchupCard({ schedule }: { schedule: ScheduleResponse }) {
+export function CurrentMatchupCard({
+  schedule,
+  className,
+}: {
+  schedule: ScheduleResponse;
+  className?: string;
+}) {
   const week = schedule.current_week;
   const matchups = week ? schedule.weeks[week - 1] : [];
 
   return (
-    <TiltCard>
-      <Card>
+    <TiltCard className={className}>
+      <Card className="h-full">
         <CardHeader className="flex flex-row items-center justify-between space-y-0">
           <CardTitle className="font-heading text-base">
             {week ? `Week ${week}` : "Schedule"}
@@ -34,7 +40,7 @@ export function CurrentMatchupCard({ schedule }: { schedule: ScheduleResponse })
             <Badge variant="outline">Season complete</Badge>
           )}
         </CardHeader>
-        <CardContent>
+        <CardContent className="min-h-0 flex-1 overflow-y-auto">
           {!week ? (
             <p className="text-sm text-muted-foreground">
               Every matchup in this schedule already has a decided winner.

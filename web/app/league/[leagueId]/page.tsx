@@ -40,9 +40,14 @@ export default async function DashboardPage({
         </p>
       </div>
 
+      {/* Grid items stretch by default, so the stacked pair in column 3 is
+          exactly as tall as the Standings card beside it, and the two split
+          that height evenly. Below lg everything collapses to one column at
+          natural height -- forcing equal heights on a narrow screen would
+          only manufacture scroll boxes. */}
       <Reveal className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <RevealItem className="lg:col-span-2">
-          <Card>
+          <Card className="h-full">
             <CardHeader>
               <CardTitle className="font-heading text-base">Standings</CardTitle>
             </CardHeader>
@@ -51,17 +56,23 @@ export default async function DashboardPage({
             </CardContent>
           </Card>
         </RevealItem>
-        <RevealItem>
-          <CurrentMatchupCard schedule={schedule} />
+        {/* The two wrappers carry the flex sizing so both children are
+            structurally identical flex items -- putting flex-1 directly on
+            the cards splits the height unevenly, because one is wrapped in
+            TiltCard and the other is not. The cards just fill their box. */}
+        <RevealItem className="flex flex-col gap-4">
+          <div className="min-h-0 flex-1">
+            <CurrentMatchupCard schedule={schedule} className="h-full" />
+          </div>
+          <div className="min-h-0 flex-1">
+            <WeekMatchupsCard schedule={schedule} className="h-full" />
+          </div>
         </RevealItem>
       </Reveal>
 
-      <Reveal className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <RevealItem className="lg:col-span-2">
-          <RostersGrid teams={roster.teams} />
-        </RevealItem>
+      <Reveal className="grid grid-cols-1 gap-4">
         <RevealItem>
-          <WeekMatchupsCard schedule={schedule} />
+          <RostersGrid teams={roster.teams} />
         </RevealItem>
       </Reveal>
     </div>

@@ -10,6 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { MatchupRow } from "@/components/dashboard/matchup-row";
+import { cn } from "@/lib/utils";
 import type { ScheduleResponse } from "@/lib/types";
 
 /**
@@ -21,18 +22,30 @@ import type { ScheduleResponse } from "@/lib/types";
  * result, since no actual weekly results are ingested yet (see
  * CurrentMatchupCard's docstring for the same rule).
  *
- * Defaults to schedule.current_week when one exists; when the season is
- * already fully decided (current_week is null), defaults to the last
- * regular-season week instead of an empty/past-the-end state, since this is
- * a "pick any week" browser now, not a "what's left" list.
+ * Defaults to the week AFTER schedule.current_week, because this card sits
+ * directly beneath CurrentMatchupCard on the dashboard -- both defaulting to
+ * the current week would stack the same matchups twice. The pair reads as
+ * "this week, pinned" plus "browse any other week"; every week including the
+ * current one is still selectable. When the season is already fully decided
+ * (current_week is null) or the current week is the last one, this falls back
+ * to the final week rather than an empty/past-the-end state.
  */
-export function WeekMatchupsCard({ schedule }: { schedule: ScheduleResponse }) {
-  const defaultWeek = schedule.current_week ?? schedule.n_regular_weeks;
+export function WeekMatchupsCard({
+  schedule,
+  className,
+}: {
+  schedule: ScheduleResponse;
+  className?: string;
+}) {
+  const lastWeek = schedule.weeks.length;
+  const defaultWeek = schedule.current_week
+    ? Math.min(schedule.current_week + 1, lastWeek)
+    : lastWeek;
   const [selectedWeek, setSelectedWeek] = useState(defaultWeek);
   const matchups = schedule.weeks[selectedWeek - 1] ?? [];
 
   return (
-    <Card>
+    <Card className={cn("h-full", className)}>
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
         <CardTitle className="font-heading text-base">Matchups</CardTitle>
         <Select
@@ -53,7 +66,7 @@ export function WeekMatchupsCard({ schedule }: { schedule: ScheduleResponse }) {
           </SelectContent>
         </Select>
       </CardHeader>
-      <CardContent>
+      <CardContent className="min-h-0 flex-1 overflow-y-auto">
         {matchups.length === 0 ? (
           <p className="text-sm text-muted-foreground">No matchups scheduled for this week.</p>
         ) : (
