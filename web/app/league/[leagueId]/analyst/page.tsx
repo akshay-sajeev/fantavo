@@ -1,6 +1,6 @@
 import { getRoster } from "@/lib/api";
 import { ApiErrorPanel } from "@/components/shared/api-error-panel";
-import { TeamPicker } from "@/components/analyst/team-picker";
+import { TeamNavSelect } from "@/components/shared/team-nav-select";
 import { AnalystChat } from "@/components/analyst/chat";
 
 /**
@@ -58,10 +58,12 @@ export default async function AnalystPage({
         </p>
       </div>
 
-      <TeamPicker
+      <TeamNavSelect
         leagueId={id}
+        path="analyst"
         teams={teams.map((t) => ({ team_id: t.team_id, team_name: t.team_name }))}
         selectedTeamId={selected.team_id}
+        label="Choose a team"
       />
 
       <AnalystChat

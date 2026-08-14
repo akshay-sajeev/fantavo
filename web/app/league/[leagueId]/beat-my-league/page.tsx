@@ -2,7 +2,7 @@ import { getBeatMyLeague, getRoster } from "@/lib/api";
 import { AdvantageCard } from "@/components/beat-my-league/advantage-card";
 import { LeagueComparisonTable } from "@/components/beat-my-league/league-comparison-table";
 import { ThreatCard } from "@/components/beat-my-league/threat-card";
-import { TeamPicker } from "@/components/beat-my-league/team-picker";
+import { TeamNavSelect } from "@/components/shared/team-nav-select";
 import { TradeCautionList } from "@/components/beat-my-league/trade-caution-list";
 import { ApiErrorPanel } from "@/components/shared/api-error-panel";
 
@@ -62,10 +62,12 @@ export default async function BeatMyLeaguePage({
         <div>
           <h1 className="font-heading text-2xl font-semibold tracking-tight">Beat My League</h1>
         </div>
-        <TeamPicker
+        <TeamNavSelect
           leagueId={id}
+          path="beat-my-league"
           teams={teams.map((t) => ({ team_id: t.team_id, team_name: t.team_name }))}
           selectedTeamId={selectedTeamId}
+          label="Choose your team"
         />
         <ApiErrorPanel error={error} />
       </div>
@@ -82,10 +84,12 @@ export default async function BeatMyLeaguePage({
         </p>
       </div>
 
-      <TeamPicker
+      <TeamNavSelect
         leagueId={id}
+        path="beat-my-league"
         teams={teams.map((t) => ({ team_id: t.team_id, team_name: t.team_name }))}
         selectedTeamId={selectedTeamId}
+        label="Choose your team"
       />
 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">

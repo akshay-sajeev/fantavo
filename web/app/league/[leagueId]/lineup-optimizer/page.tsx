@@ -4,7 +4,7 @@ import { describeLineupTradeoff } from "@/lib/lineup-optimizer";
 import { ApiErrorPanel } from "@/components/shared/api-error-panel";
 import { FramingNote } from "@/components/lineup/framing-note";
 import { LineupCard } from "@/components/lineup/lineup-card";
-import { TeamPicker } from "@/components/lineup/team-picker";
+import { TeamNavSelect } from "@/components/shared/team-nav-select";
 import { TradeoffCallout } from "@/components/lineup/tradeoff-callout";
 
 /**
@@ -59,10 +59,12 @@ export default async function LineupOptimizerPage({
             Lineup Optimizer
           </h1>
         </div>
-        <TeamPicker
+        <TeamNavSelect
           leagueId={id}
+          path="lineup-optimizer"
           teams={teams.map((t) => ({ team_id: t.team_id, team_name: t.team_name }))}
           selectedTeamId={selectedTeamId}
+          label="Choose a team"
         />
         <ApiErrorPanel error={error} />
       </div>
@@ -94,10 +96,12 @@ export default async function LineupOptimizerPage({
         </p>
       </div>
 
-      <TeamPicker
+      <TeamNavSelect
         leagueId={id}
+        path="lineup-optimizer"
         teams={teams.map((t) => ({ team_id: t.team_id, team_name: t.team_name }))}
         selectedTeamId={selectedTeamId}
+        label="Choose a team"
       />
 
       <FramingNote

@@ -2,7 +2,7 @@ import { getRoster, getWaiverIntelligence } from "@/lib/api";
 import { ApiErrorPanel } from "@/components/shared/api-error-panel";
 import { OwnershipNote } from "@/components/waivers/ownership-note";
 import { PositionGroupCard } from "@/components/waivers/position-group-card";
-import { TeamPicker } from "@/components/waivers/team-picker";
+import { TeamNavSelect } from "@/components/shared/team-nav-select";
 
 /**
  * Waiver Intelligence: a ranked, position-grouped free-agent priority list
@@ -57,10 +57,12 @@ export default async function WaiversPage({
             Waiver Intelligence
           </h1>
         </div>
-        <TeamPicker
+        <TeamNavSelect
           leagueId={id}
+          path="waivers"
           teams={teams.map((t) => ({ team_id: t.team_id, team_name: t.team_name }))}
           selectedTeamId={selectedTeamId}
+          label="Choose a team"
         />
         <ApiErrorPanel error={error} />
       </div>
@@ -79,10 +81,12 @@ export default async function WaiversPage({
         </p>
       </div>
 
-      <TeamPicker
+      <TeamNavSelect
         leagueId={id}
+        path="waivers"
         teams={teams.map((t) => ({ team_id: t.team_id, team_name: t.team_name }))}
         selectedTeamId={selectedTeamId}
+        label="Choose a team"
       />
 
       <OwnershipNote note={intel.ownership_data_note} />
