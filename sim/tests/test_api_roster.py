@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 from ingest.db import DEFAULT_TEST_DSN, ingest_league
 from ingest.errors import MissingProjectionError
 from sim.api import app as app_module
-from sim.api.roster_view import load_team_rosters
+from sim.api.roster_view import _BENCH_DEPTH_RELEVANT_POSITIONS, load_team_rosters
 
 TEST_DSN = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DSN)
 
@@ -106,20 +106,36 @@ def test_positional_concentration_flags_only_positions_with_zero_bench_depth(
     """Since Phase 6, `scripts/ingest_synthetic_league.py` also drafts real
     bench players (see docs/decisions.md) -- so this no longer flags every
     starting position for every team. Assert the formula's actual
-    documented rule (flag a starting position iff zero same-position bench
-    players) against whatever bench composition this run's random-but-
-    deterministic-per-test-seed draft happened to produce, rather than a
-    fixed hand-computed set.
+    documented rule (flag a QB/RB/WR/TE starting position iff zero
+    same-position bench players -- K/D-ST are never flagged, see
+    `_BENCH_DEPTH_RELEVANT_POSITIONS`) against whatever bench composition
+    this run's random-but-deterministic-per-test-seed draft happened to
+    produce, rather than a fixed hand-computed set.
     """
     season_id = raw_fixture["seasonId"]
     rosters = load_team_rosters(pg_conn, synthetic_league_id, season_id)
     assert any(team.bench for team in rosters)  # bench depth now genuinely exists
     for team in rosters:
-        starter_positions = {p.position for p in team.starters}
+        starter_positions = {
+            p.position for p in team.starters if p.position in _BENCH_DEPTH_RELEVANT_POSITIONS
+        }
         bench_positions = {p.position for p in team.bench}
         assert set(team.positional_concentration) == {
             f"No bench depth at {pos}" for pos in starter_positions if pos not in bench_positions
         }
+
+
+def test_positional_concentration_never_flags_kicker_or_d_st(
+    pg_conn: psycopg.Connection[Any], synthetic_league_id: int, raw_fixture: dict[str, Any]
+) -> None:
+    """K and D/ST are single-slot positions a real roster normally carries
+    exactly one of -- zero bench depth there is expected, not a
+    concentration risk (see `_positional_concentration`'s docstring)."""
+    season_id = raw_fixture["seasonId"]
+    rosters = load_team_rosters(pg_conn, synthetic_league_id, season_id)
+    for team in rosters:
+        assert "No bench depth at K" not in team.positional_concentration
+        assert "No bench depth at D/ST" not in team.positional_concentration
 
 
 # --------------------------------------------------------------------------

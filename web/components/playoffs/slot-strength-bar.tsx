@@ -11,7 +11,10 @@ import type { SlotPlayoffStrength } from "@/lib/types";
  * math itself is nearly identical across every slot in the league (see
  * sim.api.playoff_planner_view's module docstring), so color is reserved
  * for the one case that's actually team-specific: this slot also having no
- * same-position bench depth.
+ * same-position bench depth. The "no bench depth" note below only ever
+ * shows when `bench_depth_relevant` is also true -- K and D/ST are
+ * single-slot positions a real roster normally carries exactly one of, so
+ * having no backup there is normal, not a note-worthy gap.
  */
 export function SlotStrengthBar({ slot }: { slot: SlotPlayoffStrength }) {
   const isWeak = slot.is_playoff_specific_weakness;
@@ -55,7 +58,7 @@ export function SlotStrengthBar({ slot }: { slot: SlotPlayoffStrength }) {
         </span>
       </div>
 
-      {!slot.has_bench_depth && (
+      {slot.bench_depth_relevant && !slot.has_bench_depth && (
         <p className="text-[11px] text-muted-foreground">No same-position bench depth</p>
       )}
     </div>

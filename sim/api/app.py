@@ -365,6 +365,7 @@ class SlotPlayoffStrengthOut(BaseModel):
     playoff_floor_ratio: float
     floor_ratio_delta: float
     has_bench_depth: bool
+    bench_depth_relevant: bool
     league_rank: int
     league_team_count: int
     league_percentile: float
@@ -727,6 +728,7 @@ def _to_slot_playoff_strength_out(slot: SlotPlayoffStrength) -> SlotPlayoffStren
         playoff_floor_ratio=slot.playoff_floor_ratio,
         floor_ratio_delta=slot.floor_ratio_delta,
         has_bench_depth=slot.has_bench_depth,
+        bench_depth_relevant=slot.bench_depth_relevant,
         league_rank=slot.league_rank,
         league_team_count=slot.league_team_count,
         league_percentile=slot.league_percentile,

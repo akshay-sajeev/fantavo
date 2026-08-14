@@ -201,7 +201,24 @@ def test_playoff_specific_weakness_requires_both_a_real_delta_and_no_bench_depth
         for slot in team.slot_strengths:
             if slot.is_playoff_specific_weakness:
                 assert not slot.has_bench_depth
+                assert slot.bench_depth_relevant
                 assert slot.floor_ratio_delta > 0
+
+
+def test_playoff_specific_weakness_never_flags_kicker_or_d_st(
+    raw_fixture: dict[str, Any],
+) -> None:
+    """K and D/ST are single-slot positions a real roster normally carries
+    exactly one of -- zero bench depth there is expected, not a real
+    per-team weakness (see `_BENCH_DEPTH_RELEVANT_POSITIONS`)."""
+    result = _compute_from_raw(
+        raw_fixture, raw_fixture["id"], raw_fixture["seasonId"], n_sims=_TEST_N_SIMS
+    )
+    for team in result.teams:
+        for slot in team.slot_strengths:
+            if slot.slot_label in ("K", "D/ST"):
+                assert slot.bench_depth_relevant is False
+                assert slot.is_playoff_specific_weakness is False
 
 
 def test_league_rank_is_a_valid_permutation_per_slot(raw_fixture: dict[str, Any]) -> None:

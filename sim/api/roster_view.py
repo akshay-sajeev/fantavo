@@ -61,6 +61,16 @@ from sim.params.variance import fit_position_cv
 _FLOOR_PERCENTILE = 0.10
 _CEILING_PERCENTILE = 0.90
 
+# The four positions with a real bench-depth decision behind them --
+# matching sim.api.waiver_intelligence_view._BENCH_DEPTH_RELEVANT_POSITIONS
+# / sim.api.beat_my_league_view._BENCH_DEPTH_RELEVANT_POSITIONS exactly (the
+# rule is shared, reimplemented locally per that established precedent). K
+# and D/ST are single-slot positions ESPN-style leagues structurally almost
+# never bench -- carrying exactly one of each is a normal, healthy roster,
+# not a concentration risk, so _positional_concentration below never flags
+# them.
+_BENCH_DEPTH_RELEVANT_POSITIONS = frozenset({"QB", "RB", "WR", "TE"})
+
 
 @dataclass(frozen=True)
 class RosterPlayer:
@@ -142,8 +152,15 @@ def _positional_concentration(
     """Flags a starting position with zero rostered bench depth at that
     same position: if that starter is unavailable in a given week, this
     team has no in-house replacement. A count over already-known position
-    labels, not a weighted or fitted score."""
-    starter_positions = sorted({p.position for p in starters})
+    labels, not a weighted or fitted score.
+
+    Only considers `_BENCH_DEPTH_RELEVANT_POSITIONS` (QB/RB/WR/TE) -- K and
+    D/ST are excluded regardless of bench composition, since a real fantasy
+    roster carrying exactly one of each is normal, not a risk (see that
+    constant's docstring)."""
+    starter_positions = sorted(
+        {p.position for p in starters if p.position in _BENCH_DEPTH_RELEVANT_POSITIONS}
+    )
     bench_position_counts = Counter(p.position for p in bench)
     return tuple(
         f"No bench depth at {pos}" for pos in starter_positions if bench_position_counts[pos] == 0

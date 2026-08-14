@@ -222,6 +222,11 @@ export interface SlotPlayoffStrength {
   playoff_floor_ratio: number;
   floor_ratio_delta: number;
   has_bench_depth: boolean;
+  /** False for a slot resolving to K or D/ST -- those are single-slot
+   * positions a real roster normally carries exactly one of, so zero bench
+   * depth there is never treated as a weakness (see
+   * sim.api.playoff_planner_view's `_BENCH_DEPTH_RELEVANT_POSITIONS`). */
+  bench_depth_relevant: boolean;
   /** 1 = the league's strongest projected playoff-weeks scorer at this slot. */
   league_rank: number;
   league_team_count: number;

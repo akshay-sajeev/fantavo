@@ -116,8 +116,14 @@ same-position bench depth), computed independently here because
 dataclass shape, but the identical underlying rule: same non-starting-slot
 set (`ingest.slots.NON_STARTING_SLOTS`), same "count bench players by their
 own `defaultPositionId` label" logic. `is_playoff_specific_weakness`
-therefore requires BOTH signals together -- `floor_ratio_delta` clearing the
-editorial threshold AND zero same-position bench depth -- the same
+therefore requires `floor_ratio_delta` clearing the editorial threshold AND
+zero same-position bench depth AND the slot resolving to a position where
+bench depth is even a real roster decision (`_BENCH_DEPTH_RELEVANT_POSITIONS`
+-- K and D/ST are single-slot positions almost never benched, so a
+same-position bench count of zero there is a near-constant fact about how
+fantasy rosters are built, not a real per-team differentiator, matching
+`sim.api.waiver_intelligence_view`'s own already-established exclusion for
+the identical reason). The same
 "multiple signals together, not just one" discipline
 `sim.api.draft_autopsy_view._synthesize_structural_finding` already
 established before making a causal claim. Confirmed live against the real
@@ -189,6 +195,17 @@ _FLOOR_PERCENTILE_PCT = 10.0
 # one (`is_playoff_specific_weakness` below).
 _WEAKNESS_DELTA_THRESHOLD = 0.08
 
+# The four positions with a real bench-depth decision behind them --
+# matching sim.api.roster_view._BENCH_DEPTH_RELEVANT_POSITIONS /
+# sim.api.waiver_intelligence_view._BENCH_DEPTH_RELEVANT_POSITIONS /
+# sim.api.beat_my_league_view._BENCH_DEPTH_RELEVANT_POSITIONS exactly (the
+# rule is shared, reimplemented locally per that established precedent). K
+# and D/ST are single-slot positions ESPN-style leagues structurally almost
+# never bench -- carrying exactly one of each is a normal, healthy roster,
+# so a slot resolving to either position can never be flagged
+# `is_playoff_specific_weakness` below, regardless of `has_bench_depth`.
+_BENCH_DEPTH_RELEVANT_POSITIONS = frozenset({"QB", "RB", "WR", "TE"})
+
 
 @dataclass(frozen=True)
 class SlotPlayoffStrength:
@@ -208,9 +225,15 @@ class SlotPlayoffStrength:
     `has_bench_depth` is the real team-specific signal: whether this team's
     own bench carries at least one same-position player behind this slot's
     starter(s) -- computed the same way `sim.api.roster_view`'s
-    `positional_concentration` already does. `is_playoff_specific_weakness`
-    requires both `floor_ratio_delta` clearing the editorial threshold AND
-    `has_bench_depth` being false -- see the module docstring.
+    `positional_concentration` already does. `bench_depth_relevant` is
+    whether this slot's real position(s) are even ones a real roster is
+    expected to carry bench depth at (`_BENCH_DEPTH_RELEVANT_POSITIONS` --
+    false for a slot resolving to K or D/ST, the same exclusion
+    `sim.api.waiver_intelligence_view`'s own `bench_depth_relevant` field
+    already applies). `is_playoff_specific_weakness` requires
+    `floor_ratio_delta` clearing the editorial threshold, AND
+    `has_bench_depth` being false, AND `bench_depth_relevant` being true --
+    see the module docstring.
     """
 
     slot_label: str
@@ -222,6 +245,7 @@ class SlotPlayoffStrength:
     playoff_floor_ratio: float
     floor_ratio_delta: float
     has_bench_depth: bool
+    bench_depth_relevant: bool
     # 1 = the league's strongest projected playoff-weeks scorer at this slot.
     league_rank: int
     league_team_count: int
@@ -481,9 +505,10 @@ def _compute_from_raw(
     slot_rng = np.random.default_rng(seed)
 
     # team_id -> {slot_label: (regular_mean, playoff_mean, regular_floor,
-    # playoff_floor, regular_floor_ratio, playoff_floor_ratio, has_bench_depth)}
+    # playoff_floor, regular_floor_ratio, playoff_floor_ratio, has_bench_depth,
+    # bench_depth_relevant)}
     per_team_slot_stats: dict[
-        int, dict[str, tuple[float, float, float, float, float, float, bool]]
+        int, dict[str, tuple[float, float, float, float, float, float, bool, bool]]
     ] = {}
 
     for team in team_params:
@@ -527,7 +552,7 @@ def _compute_from_raw(
         regular = sampled[:, :n_regular_weeks, :]
         playoff = sampled[:, n_regular_weeks:, :]
 
-        slot_stats: dict[str, tuple[float, float, float, float, float, float, bool]] = {}
+        slot_stats: dict[str, tuple[float, float, float, float, float, float, bool, bool]] = {}
         for slot_label in league_slot_labels:
             idxs = [i for i, label in enumerate(slot_labels) if label == slot_label]
             if not idxs:
@@ -548,6 +573,11 @@ def _compute_from_raw(
             # matters, not at the literal "FLEX" label.
             slot_real_positions = {real_positions[i] for i in idxs}
             has_bench_depth = any(bench_position_counts[pos] > 0 for pos in slot_real_positions)
+            # False for a slot resolving to K or D/ST -- see
+            # _BENCH_DEPTH_RELEVANT_POSITIONS.
+            bench_depth_relevant = any(
+                pos in _BENCH_DEPTH_RELEVANT_POSITIONS for pos in slot_real_positions
+            )
 
             slot_stats[slot_label] = (
                 regular_mean,
@@ -557,6 +587,7 @@ def _compute_from_raw(
                 regular_floor_ratio,
                 playoff_floor_ratio,
                 has_bench_depth,
+                bench_depth_relevant,
             )
         per_team_slot_stats[team.team_id] = slot_stats
 
@@ -590,6 +621,7 @@ def _compute_from_raw(
                 regular_floor_ratio,
                 playoff_floor_ratio,
                 has_bench_depth,
+                bench_depth_relevant,
             ) = slot_stats[slot_label]
             rank, team_count = league_rank_by_slot_team[(slot_label, team.team_id)]
             percentile = 100.0 * (team_count - rank) / (team_count - 1) if team_count > 1 else 100.0
@@ -606,11 +638,14 @@ def _compute_from_raw(
                     playoff_floor_ratio=playoff_floor_ratio,
                     floor_ratio_delta=delta,
                     has_bench_depth=has_bench_depth,
+                    bench_depth_relevant=bench_depth_relevant,
                     league_rank=rank,
                     league_team_count=team_count,
                     league_percentile=percentile,
                     is_playoff_specific_weakness=(
-                        delta >= _WEAKNESS_DELTA_THRESHOLD and not has_bench_depth
+                        delta >= _WEAKNESS_DELTA_THRESHOLD
+                        and not has_bench_depth
+                        and bench_depth_relevant
                     ),
                 )
             )
