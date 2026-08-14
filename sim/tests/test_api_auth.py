@@ -22,7 +22,10 @@ from fastapi.testclient import TestClient
 from ingest.db import DEFAULT_TEST_DSN
 from sim.api import app as app_module
 from sim.api.auth_view import (
+    SESSION_LIFETIME_DAYS,
+    THROTTLE_LOCKOUT_MINUTES,
     THROTTLE_MAX_FAILURES,
+    THROTTLE_WINDOW_MINUTES,
     AccountLockedError,
     EmailAlreadyRegisteredError,
     InvalidCredentialsError,
@@ -132,6 +135,38 @@ def test_validate_session_rejects_expired_session(pg_conn: psycopg.Connection[An
         validate_session(pg_conn, token, long_after_expiry)
 
 
+def test_validate_session_extends_expires_at(pg_conn: psycopg.Connection[Any]) -> None:
+    user = create_user(pg_conn, "sliding@example.com", "a-real-password", FIXED_NOW)
+    token = create_session(pg_conn, user, FIXED_NOW)
+    later = FIXED_NOW + timedelta(days=29)
+    validate_session(pg_conn, token, later)
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT expires_at, last_seen_at FROM user_session WHERE user_id = %s",
+            (user.user_id,),
+        )
+        row = cur.fetchone()
+    assert row is not None
+    expires_at, last_seen_at = row
+    assert expires_at == later + timedelta(days=SESSION_LIFETIME_DAYS)
+    assert last_seen_at == later
+
+
+def test_validate_session_treats_exact_expiry_instant_as_already_expired(
+    pg_conn: psycopg.Connection[Any],
+) -> None:
+    """validate_session's comparison is `expires_at <= now`, so the boundary
+    instant itself (now == expires_at) is expired, not valid -- an
+    exclusive-on-the-valid-side boundary, the opposite of what a reader
+    might assume without checking. This pins the behavior actually
+    implemented, not the inclusive boundary a first guess might expect."""
+    user = create_user(pg_conn, "boundary@example.com", "a-real-password", FIXED_NOW)
+    token = create_session(pg_conn, user, FIXED_NOW)
+    exactly_at_expiry = FIXED_NOW + timedelta(days=SESSION_LIFETIME_DAYS)
+    with pytest.raises(InvalidSessionError):
+        validate_session(pg_conn, token, exactly_at_expiry)
+
+
 def test_delete_session_invalidates_it_immediately(pg_conn: psycopg.Connection[Any]) -> None:
     user = create_user(pg_conn, "logout@example.com", "a-real-password", FIXED_NOW)
     token = create_session(pg_conn, user, FIXED_NOW)
@@ -212,6 +247,42 @@ def test_successful_login_clears_the_failure_count(pg_conn: psycopg.Connection[A
     # And the count is now reset, so a single subsequent failure doesn't lock:
     with pytest.raises(InvalidCredentialsError):
         authenticate_user(pg_conn, "recovers@example.com", "wrong", FIXED_NOW)
+
+
+def test_lockout_releases_after_the_window(pg_conn: psycopg.Connection[Any]) -> None:
+    create_user(pg_conn, "releases@example.com", "the-right-password", FIXED_NOW)
+    for _ in range(THROTTLE_MAX_FAILURES):
+        with pytest.raises(InvalidCredentialsError):
+            authenticate_user(pg_conn, "releases@example.com", "wrong", FIXED_NOW)
+    after_lockout = FIXED_NOW + timedelta(minutes=THROTTLE_LOCKOUT_MINUTES + 1)
+    user = authenticate_user(
+        pg_conn, "releases@example.com", "the-right-password", after_lockout
+    )
+    assert user.email == "releases@example.com"
+
+
+def test_failure_counter_resets_after_the_window(pg_conn: psycopg.Connection[Any]) -> None:
+    """Failures separated by more than THROTTLE_WINDOW_MINUTES must not
+    accumulate toward a lockout -- _record_failed_login resets failed_count
+    to 1 (rather than incrementing) once `now - first_failed_at` exceeds the
+    window. THROTTLE_MAX_FAILURES - 1 failures at FIXED_NOW would lock on
+    one more *only if* the count kept accumulating; because the next
+    failure happens after the window, the count resets to 1 instead, so the
+    account is not locked and a correct password right after still works."""
+    create_user(pg_conn, "windowreset@example.com", "the-right-password", FIXED_NOW)
+    for _ in range(THROTTLE_MAX_FAILURES - 1):
+        with pytest.raises(InvalidCredentialsError):
+            authenticate_user(pg_conn, "windowreset@example.com", "wrong", FIXED_NOW)
+    after_window = FIXED_NOW + timedelta(minutes=THROTTLE_WINDOW_MINUTES + 1)
+    # If the counter had NOT reset, this would be the 5th failure -> lockout.
+    with pytest.raises(InvalidCredentialsError):
+        authenticate_user(pg_conn, "windowreset@example.com", "wrong", after_window)
+    # Confirms the reset (not just a delayed lockout): the account is not
+    # locked, so the correct password succeeds immediately after.
+    user = authenticate_user(
+        pg_conn, "windowreset@example.com", "the-right-password", after_window
+    )
+    assert user.email == "windowreset@example.com"
 
 
 def test_signup_then_login_returns_a_working_token(client: TestClient) -> None:

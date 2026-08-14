@@ -2358,3 +2358,77 @@ sub-feature; nothing needs undoing when that day comes.
   no correction needed) and selecting a different week correctly swapped in
   that week's real matchups, cross-checked against the underlying schedule
   data; confirmed no horizontal scroll at 375px.
+
+## Phase 16 — Auth Phase A — identity (signup, login, sessions, throttling)
+
+- **Added account identity end to end: signup, login, logout, sessions, and
+  login throttling, with no ESPN or per-user league data behind it yet.**
+  `sim/api/auth_view.py` owns password hashing (argon2id via `PasswordHasher`,
+  NIST SP 800-63B length-only policy at `MIN_PASSWORD_LENGTH = 10`, no
+  character-class requirements), session token issuance/validation (a random
+  `secrets.token_urlsafe(32)` token, stored only as its sha256 hash, with a
+  30-day sliding expiry that pushes `expires_at` forward on every successful
+  `validate_session` call), and login throttling (5 failures within a
+  15-minute window locks the email for 15 minutes). `sim/api/app.py` exposes
+  this as 4 routes (`/auth/signup`, `/auth/login`, `/auth/logout`,
+  `/auth/me`); `web/middleware.ts` gates `/league/:path*` on the session
+  cookie's presence, with `getCurrentUser()` in
+  `web/app/league/[leagueId]/layout.tsx` as the authoritative check that
+  actually calls `GET /auth/me`. Deliberately does **not** add yet: ESPN
+  credentials, league connection, or any per-user data model -- every signed-in
+  user still sees the identical `DEFAULT_LEAGUE_ID` league. That's Phase B.
+- **Found and fixed a real pre-existing bug in `get_connection`
+  (`sim/api/app.py:1108-1133`): writes through it were being silently
+  discarded.** Before this phase, every route using this dependency was
+  read-only, so nothing exposed the gap: a bare, unwrapped `cur.execute()`
+  read (e.g. `auth_view._raise_if_locked`'s SELECT) opens an ambient
+  transaction on the connection, so a *later* `with conn.transaction():`
+  write in the same request (e.g. `_record_failed_login`'s INSERT, or
+  `create_session`'s INSERT right after a successful login) becomes a
+  SAVEPOINT nested inside that still-open ambient transaction rather than a
+  top-level commit -- see psycopg3's docs on `Connection.transaction()`
+  nesting. Nothing ever committed the outer transaction, so it silently
+  rolled back on `conn.close()`, and the write never reached the database
+  even though the route had already returned 200/201/401/429 as if it had.
+  Fixed by committing unconditionally in `finally` (so it still runs when a
+  route raises `HTTPException`, e.g. login's 401 after the failed-attempt
+  row was written, or its 429 after the 5th) -- closes the gap for every
+  route, present and future, without changing any read-only route's
+  behavior (committing a read-only transaction is a no-op). Independently
+  verified against every one of the 244 pre-existing (read-only) routes in
+  the final whole-branch review.
+- **Found and fixed a timing side-channel between unknown-email and
+  wrong-password login attempts.** `authenticate_user`
+  (`sim/api/auth_view.py:271-301`) originally only ran the expensive argon2
+  `verify_password` check when the email matched an existing account, so an
+  unknown-email attempt returned faster than a wrong-password one -- an
+  attacker could use response timing to enumerate which emails have
+  accounts, undermining the uniform "invalid email or password" error text.
+  Fixed by always running `verify_password`, against a precomputed
+  `_DUMMY_PASSWORD_HASH` on the unknown-email path, so both branches do
+  equivalent work regardless of whether the email exists.
+- **Deliberate asymmetry: signup failures return 400, login failures return
+  401 -- not an oversight.** The design spec's "same status code across all
+  three uniform-error cases" language was read literally during
+  implementation and flagged as a conflict; the accepted ruling is that only
+  the two *login* failure cases (unknown-email vs wrong-password) need to be
+  indistinguishable from each other, and they are -- same 401, byte-identical
+  `"invalid email or password"` body. Signup-vs-login is already disclosed by
+  which endpoint was called, so matching status codes across the two
+  different endpoints would add no real privacy protection.
+- **Accepted a read-then-write race in `_record_failed_login`
+  (`sim/api/auth_view.py:221-263`) rather than hardening it now.** The
+  failure count is read in one statement and written back in another,
+  non-atomically; concurrent failed attempts against the same email can
+  under-count, letting a burst of parallel guesses land slightly more than
+  `THROTTLE_MAX_FAILURES` before locking. Accepted because it only weakens,
+  never defeats, the throttle, and is cheap to harden later (move the SELECT
+  inside the existing `conn.transaction()` with `FOR UPDATE`).
+- **Verification**: `pytest sim/tests -q` all passing (pre-existing count
+  plus new tests covering sliding-expiry persistence, the exact-boundary
+  expiry instant, lockout release after the window, and the failure-counter
+  reset after the window). `mypy --strict sim` and `ruff check sim` show no
+  new errors beyond the pre-existing baseline. Full HTTP-level verification
+  (live browser walkthrough of signup/login/logout/session-expiry against the
+  real running stack) performed during the original implementation, recorded
+  in `.superpowers/sdd/2026-08-14-auth-phase-a-identity/progress.md`.
