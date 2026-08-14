@@ -18,8 +18,9 @@ mirrors).
 from __future__ import annotations
 
 import hashlib
+import secrets
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import psycopg
@@ -140,3 +141,59 @@ def create_user(
         user_id: int = row[0]
 
     return AuthedUser(user_id=user_id, email=email)
+
+
+def create_session(conn: psycopg.Connection[Any], user: AuthedUser, now: datetime) -> str:
+    token = secrets.token_urlsafe(32)
+    token_hash = _hash_token(token)
+    expires_at = now + timedelta(days=SESSION_LIFETIME_DAYS)
+    with conn.transaction():
+        conn.execute(
+            """
+            INSERT INTO user_session (token_hash, user_id, created_at, expires_at, last_seen_at)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (token_hash, user.user_id, now, expires_at, now),
+        )
+    return token
+
+
+def validate_session(
+    conn: psycopg.Connection[Any], token: str, now: datetime
+) -> AuthedUser:
+    """Sliding expiry: a successful validation here pushes expires_at
+    forward another SESSION_LIFETIME_DAYS, so an active user's session
+    never lapses mid-use."""
+    token_hash = _hash_token(token)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT u.user_id, u.email, s.expires_at
+            FROM user_session s
+            JOIN app_user u ON u.user_id = s.user_id
+            WHERE s.token_hash = %s
+            """,
+            (token_hash,),
+        )
+        row = cur.fetchone()
+
+    if row is None or row[2] <= now:
+        raise InvalidSessionError("session is invalid or expired")
+
+    new_expires_at = now + timedelta(days=SESSION_LIFETIME_DAYS)
+    with conn.transaction():
+        conn.execute(
+            "UPDATE user_session SET last_seen_at = %s, expires_at = %s WHERE token_hash = %s",
+            (now, new_expires_at, token_hash),
+        )
+
+    return AuthedUser(user_id=row[0], email=row[1])
+
+
+def delete_session(conn: psycopg.Connection[Any], token: str) -> None:
+    """Idempotent: deleting a token that was never issued (or was already
+    deleted) is not an error -- logout must always succeed from the
+    caller's point of view."""
+    token_hash = _hash_token(token)
+    with conn.transaction():
+        conn.execute("DELETE FROM user_session WHERE token_hash = %s", (token_hash,))
