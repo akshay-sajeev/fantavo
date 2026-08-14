@@ -96,6 +96,15 @@ def verify_password(password: str, password_hash: str) -> bool:
     return True
 
 
+# Precomputed argon2 hash of a fixed placeholder string.
+# Used in authenticate_user to ensure verify_password always runs, even for
+# unknown emails, preventing a timing side-channel that could reveal which
+# emails have accounts. See authenticate_user's docstring for details.
+_DUMMY_PASSWORD_HASH = hash_password(
+    "this hash exists only to keep login timing constant"
+)
+
+
 def _hash_token(token: str) -> str:
     """sha256 of a session token -- see user_session.token_hash's docstring
     in the migration for why the raw token itself is never stored."""
@@ -278,7 +287,13 @@ def authenticate_user(
         )
         row = cur.fetchone()
 
-    if row is not None and verify_password(password, row[2]):
+    # Always run verify_password (an expensive argon2 operation) regardless
+    # of whether the email exists, to prevent a timing side-channel that could
+    # reveal which emails have accounts.
+    password_hash = row[2] if row is not None else _DUMMY_PASSWORD_HASH
+    password_ok = verify_password(password, password_hash)
+
+    if row is not None and password_ok:
         _clear_throttle(conn, email_norm)
         return AuthedUser(user_id=row[0], email=row[1])
 
