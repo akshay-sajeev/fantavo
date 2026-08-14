@@ -1,8 +1,10 @@
-import { getSimulation } from "@/lib/api";
+import { getPowerRankingRoast, getSimulation } from "@/lib/api";
 import { ApiErrorPanel } from "@/components/shared/api-error-panel";
+import { DraftDataNote } from "@/components/roast/draft-data-note";
 import { RankingsBarChart } from "@/components/power-rankings/rankings-bar-chart";
 import { RankingsTable } from "@/components/power-rankings/rankings-table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import type { TeamRoast } from "@/lib/types";
 
 export default async function PowerRankingsPage({
   params,
@@ -12,9 +14,9 @@ export default async function PowerRankingsPage({
   const { leagueId } = await params;
   const id = Number(leagueId);
 
-  let simulation;
+  let simulation, roast;
   try {
-    simulation = await getSimulation(id);
+    [simulation, roast] = await Promise.all([getSimulation(id), getPowerRankingRoast(id)]);
   } catch (error) {
     return (
       <div className="py-6">
@@ -29,6 +31,11 @@ export default async function PowerRankingsPage({
   const teams = [...simulation.teams].sort(
     (a, b) => b.title_probability - a.title_probability || b.playoff_probability - a.playoff_probability,
   );
+
+  // Each row in the full breakdown opens that team's roast in a popup
+  // (formerly its own page, see docs/decisions.md Phase 12) -- keyed by
+  // team_id since that's the only field both TeamOutcome and TeamRoast share.
+  const roastByTeamId = new Map<number, TeamRoast>(roast.teams.map((t) => [t.team_id, t]));
 
   return (
     <div className="space-y-4 py-4">
@@ -54,9 +61,14 @@ export default async function PowerRankingsPage({
         <p className="mb-3 text-sm text-muted-foreground">
           A title chance alone doesn&apos;t say whether a team&apos;s outcomes are bunched
           tightly around that number or spread across a wide range of finishes — the finish
-          distribution shows the shape.
+          distribution shows the shape. Click a team for its roast.
         </p>
-        <RankingsTable teams={teams} />
+        {!roast.has_draft_data ? (
+          <div className="mb-3">
+            <DraftDataNote />
+          </div>
+        ) : null}
+        <RankingsTable teams={teams} roastByTeamId={roastByTeamId} />
       </div>
     </div>
   );
