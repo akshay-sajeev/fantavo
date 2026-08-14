@@ -44,12 +44,12 @@ export function TeamSelect({
     <Select
       value={value}
       onValueChange={(next) => {
-        if (next != null) onChange(next);
+        if (next != null && next !== value) onChange(next);
       }}
     >
       <SelectTrigger aria-label={label} className={cn("font-semibold", className)}>
         <SelectValue>
-          {(current: number) => teams.find((t) => t.team_id === current)?.team_name ?? ""}
+          {(current: number | null) => teams.find((t) => t.team_id === current)?.team_name ?? ""}
         </SelectValue>
       </SelectTrigger>
       <SelectContent alignItemWithTrigger={false}>

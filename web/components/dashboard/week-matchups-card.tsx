@@ -42,7 +42,7 @@ export function WeekMatchupsCard({ schedule }: { schedule: ScheduleResponse }) {
           }}
         >
           <SelectTrigger aria-label="Select week">
-            <SelectValue>{(value: number) => `Week ${value}`}</SelectValue>
+            <SelectValue>{(value: number | null) => (value == null ? "" : `Week ${value}`)}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             {schedule.weeks.map((_, i) => (
