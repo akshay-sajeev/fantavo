@@ -5,6 +5,7 @@ import { AlertTriangle, Repeat } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PlayerPicker } from "@/components/whatif/player-picker";
+import { TeamSelect } from "@/components/whatif/team-select";
 import {
   SingleTeamComparisonResult,
   WhatIfLoadingSkeleton,
@@ -76,18 +77,13 @@ export function RosterSwapBuilder({ teams, leagueId }: { teams: TeamRoster[]; le
       <Card>
         <CardHeader>
           <CardTitle className="font-heading text-base">
-            <select
+            <TeamSelect
+              teams={teams}
               value={teamId}
-              onChange={(e) => selectTeam(Number(e.target.value))}
-              className="w-full max-w-xs cursor-pointer rounded-md border border-border bg-background px-2 py-1.5 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
-              aria-label="Team to swap"
-            >
-              {teams.map((t) => (
-                <option key={t.team_id} value={t.team_id}>
-                  {t.team_name}
-                </option>
-              ))}
-            </select>
+              onChange={selectTeam}
+              label="Team to swap"
+              className="w-full max-w-xs"
+            />
           </CardTitle>
         </CardHeader>
         <CardContent>

@@ -5,6 +5,7 @@ import { ArrowLeftRight, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PlayerPicker } from "@/components/whatif/player-picker";
+import { TeamSelect } from "@/components/whatif/team-select";
 import {
   TradeComparisonResult,
   WhatIfLoadingSkeleton,
@@ -104,18 +105,13 @@ export function TradeBuilder({ teams, leagueId }: { teams: TeamRoster[]; leagueI
         <Card>
           <CardHeader>
             <CardTitle className="font-heading text-base">
-              <select
+              <TeamSelect
+                teams={teams}
                 value={teamAId}
-                onChange={(e) => selectTeamA(Number(e.target.value))}
-                className="w-full cursor-pointer rounded-md border border-border bg-background px-2 py-1.5 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
-                aria-label="Team sending players (side A)"
-              >
-                {teams.map((t) => (
-                  <option key={t.team_id} value={t.team_id}>
-                    {t.team_name}
-                  </option>
-                ))}
-              </select>
+                onChange={selectTeamA}
+                label="Team sending players (side A)"
+                className="w-full"
+              />
             </CardTitle>
             <p className="text-xs text-muted-foreground">Select players to send away</p>
           </CardHeader>
@@ -132,18 +128,13 @@ export function TradeBuilder({ teams, leagueId }: { teams: TeamRoster[]; leagueI
         <Card>
           <CardHeader>
             <CardTitle className="font-heading text-base">
-              <select
+              <TeamSelect
+                teams={teams}
                 value={teamBId}
-                onChange={(e) => selectTeamB(Number(e.target.value))}
-                className="w-full cursor-pointer rounded-md border border-border bg-background px-2 py-1.5 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
-                aria-label="Team sending players (side B)"
-              >
-                {teams.map((t) => (
-                  <option key={t.team_id} value={t.team_id}>
-                    {t.team_name}
-                  </option>
-                ))}
-              </select>
+                onChange={selectTeamB}
+                label="Team sending players (side B)"
+                className="w-full"
+              />
             </CardTitle>
             <p className="text-xs text-muted-foreground">Select players to send away</p>
           </CardHeader>
