@@ -5,6 +5,17 @@
  * one over with an extra derived field.
  */
 
+/** Mirrors sim.api.app.MeResponseOut / sim.api.auth_view.AuthedUser. */
+export interface AuthUser {
+  user_id: number;
+  email: string;
+}
+
+/** Mirrors sim.api.app.AuthResponseOut. */
+export interface AuthResponse extends AuthUser {
+  token: string;
+}
+
 export interface TeamOutcome {
   team_id: number;
   team_name: string;

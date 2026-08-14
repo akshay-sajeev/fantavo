@@ -2,6 +2,8 @@ import "server-only";
 import type {
   AnalystChatResponse,
   AnalystMessage,
+  AuthResponse,
+  AuthUser,
   BeatMyLeagueResponse,
   DraftAutopsyResponse,
   LineupOptimizerResponse,
@@ -105,6 +107,37 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
     throw new ApiError(res.status, detail || res.statusText);
   }
   return (await res.json()) as T;
+}
+
+async function authedFetch(path: string, token: string, method: "GET" | "POST"): Promise<Response> {
+  const url = new URL(path, API_BASE);
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+  } catch (cause) {
+    throw new ApiError(
+      0,
+      `could not reach the sim API at ${API_BASE} -- is uvicorn running? (${String(cause)})`,
+    );
+  }
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    let detail = body;
+    try {
+      const parsed = JSON.parse(body) as { detail?: unknown };
+      if (typeof parsed.detail === "string") detail = parsed.detail;
+    } catch {
+      // not JSON -- fall through and use the raw body text
+    }
+    throw new ApiError(res.status, detail || res.statusText);
+  }
+  return res;
 }
 
 export function getSimulation(
@@ -247,4 +280,21 @@ export function postAnalystChat(
   body: { season_id?: number; messages: AnalystMessage[] },
 ): Promise<AnalystChatResponse> {
   return postJson<AnalystChatResponse>(`/league/${leagueId}/analyst/${teamId}`, body);
+}
+
+export function postAuthSignup(email: string, password: string): Promise<AuthResponse> {
+  return postJson<AuthResponse>("/auth/signup", { email, password });
+}
+
+export function postAuthLogin(email: string, password: string): Promise<AuthResponse> {
+  return postJson<AuthResponse>("/auth/login", { email, password });
+}
+
+export async function postAuthLogout(token: string): Promise<void> {
+  await authedFetch("/auth/logout", token, "POST");
+}
+
+export async function getAuthMe(token: string): Promise<AuthUser> {
+  const res = await authedFetch("/auth/me", token, "GET");
+  return (await res.json()) as AuthUser;
 }
