@@ -33,6 +33,18 @@ const SUGGESTED_PROMPTS_BASE = [
   "What should I target on waivers?",
 ];
 
+// One picked at random per request (see `send`), not rotated mid-load --
+// a single stable line is easier to read during a several-second wait than
+// text that keeps changing under you.
+const LOADING_PHRASES = [
+  "Crunching 10,000 simulated seasons…",
+  "Running the numbers…",
+  "Querying the win-probability model…",
+  "Re-running the Monte Carlo…",
+  "Digging through the box scores…",
+  "Simulating the rest of the season…",
+];
+
 export function AnalystChat({
   leagueId,
   teamId,
@@ -48,6 +60,11 @@ export function AnalystChat({
   const [input, setInput] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [loadingPhrase, setLoadingPhrase] = useState(LOADING_PHRASES[0]);
+  // Index of the one message currently typing out (see MessageContent's
+  // `animate` prop) -- always the model reply that just arrived, if any.
+  // Everything else in the transcript renders instantly.
+  const [animatingIndex, setAnimatingIndex] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -67,6 +84,7 @@ export function AnalystChat({
     setInput("");
     setStatus("loading");
     setErrorMessage(null);
+    setLoadingPhrase(LOADING_PHRASES[Math.floor(Math.random() * LOADING_PHRASES.length)]);
 
     try {
       const res = await fetch(`/api/league/${leagueId}/analyst/${teamId}`, {
@@ -85,6 +103,9 @@ export function AnalystChat({
         ...nextMessages,
         { role: "model", text: data.reply, citations: data.citations, spans: data.spans },
       ]);
+      // nextMessages.length is exactly the index the new model message
+      // lands at once appended above.
+      setAnimatingIndex(nextMessages.length);
       setStatus("idle");
     } catch (error) {
       setStatus("error");
@@ -111,29 +132,38 @@ export function AnalystChat({
           </div>
         )}
 
-        {messages.map((message, i) => (
-          <div
-            key={i}
-            className={
-              message.role === "user"
-                ? "ml-auto max-w-[85%] rounded-2xl rounded-br-sm bg-primary px-4 py-2.5 text-sm text-primary-foreground"
-                : "mr-auto max-w-[85%] rounded-2xl rounded-bl-sm border border-border bg-background px-4 py-2.5 text-sm text-foreground"
-            }
-          >
-            {message.isError ? (
-              <span className="flex items-center gap-1.5 text-destructive">
-                <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
-                {message.text}
-              </span>
-            ) : (
-              <MessageContent
-                text={message.text}
-                citations={message.citations ?? []}
-                spans={message.spans ?? []}
-              />
-            )}
-          </div>
-        ))}
+        {messages.map((message, i) => {
+          const isAnimating = message.role === "model" && i === animatingIndex;
+          return (
+            <div
+              key={i}
+              className={
+                message.role === "user"
+                  ? "ml-auto w-fit max-w-[85%] rounded-2xl rounded-br-sm bg-primary px-4 py-2.5 text-sm text-primary-foreground"
+                  : "mr-auto max-w-[85%] rounded-2xl rounded-bl-sm border border-border bg-background px-4 py-2.5 text-sm text-foreground"
+              }
+            >
+              {message.isError ? (
+                <span className="flex items-center gap-1.5 text-destructive">
+                  <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  {message.text}
+                </span>
+              ) : (
+                <MessageContent
+                  text={message.text}
+                  citations={message.citations ?? []}
+                  spans={message.spans ?? []}
+                  animate={isAnimating}
+                  onAnimationComplete={
+                    isAnimating
+                      ? () => setAnimatingIndex((cur) => (cur === i ? null : cur))
+                      : undefined
+                  }
+                />
+              )}
+            </div>
+          );
+        })}
 
         {status === "loading" && (
           <div
@@ -143,7 +173,7 @@ export function AnalystChat({
             className="mr-auto flex max-w-[85%] items-center gap-2 rounded-2xl rounded-bl-sm border border-border bg-background px-4 py-2.5 text-sm text-muted-foreground"
           >
             <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
-            Running real tool calls and asking the model&hellip;
+            {loadingPhrase}
           </div>
         )}
 
