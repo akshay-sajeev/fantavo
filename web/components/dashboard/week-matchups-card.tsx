@@ -37,7 +37,9 @@ export function WeekMatchupsCard({ schedule }: { schedule: ScheduleResponse }) {
         <CardTitle className="font-heading text-base">Matchups</CardTitle>
         <Select
           value={selectedWeek}
-          onValueChange={(value) => setSelectedWeek(value as number)}
+          onValueChange={(value) => {
+            if (value != null) setSelectedWeek(value);
+          }}
         >
           <SelectTrigger aria-label="Select week">
             <SelectValue>{(value: number) => `Week ${value}`}</SelectValue>
