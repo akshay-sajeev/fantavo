@@ -5,6 +5,8 @@ import Link from "next/link";
 import "./globals.css";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { RouteProgress } from "@/components/shared/route-progress";
+import { UserMenu } from "@/components/shared/user-menu";
+import { getCurrentUser } from "@/lib/auth";
 
 const firaSans = Fira_Sans({
   variable: "--font-body",
@@ -32,7 +34,8 @@ export const metadata: Metadata = {
   description: "Simulation-driven fantasy football analytics",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  const user = await getCurrentUser();
   return (
     <html
       lang="en"
@@ -42,7 +45,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <TooltipProvider delay={150}>
           <RouteProgress />
           <header className="sticky top-0 z-40 border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
-            <div className="flex h-16 items-center justify-start gap-6 px-4">
+            <div className="flex h-16 items-center justify-between gap-6 px-4">
               <Link
                 href="/"
                 className="flex items-center gap-3 font-[family-name:var(--font-brand)] text-xl font-bold tracking-wide text-primary uppercase"
@@ -50,6 +53,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
                 <Image src="/fantavo-logo.svg" alt="" width={40} height={30} className="h-10 w-auto" priority />
                 Fantavo
               </Link>
+              {user && <UserMenu email={user.email} />}
             </div>
           </header>
           <main className="flex flex-1 flex-col">{children}</main>
