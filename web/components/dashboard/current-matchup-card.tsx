@@ -26,7 +26,7 @@ export function CurrentMatchupCard({ schedule }: { schedule: ScheduleResponse })
             {week ? `Week ${week}` : "Schedule"}
           </CardTitle>
           {week ? (
-            <Badge variant="outline" className="border-brand-accent/40 bg-brand-accent/15 text-brand-accent-foreground">
+            <Badge variant="outline" className="border-brand-accent/40 bg-brand-accent/15 text-brand-accent">
               Upcoming
             </Badge>
           ) : (

@@ -98,8 +98,8 @@ export function StandingsTable({
                   key={team.team_id}
                   variants={reduceMotion ? undefined : revealItemVariants}
                   className={cn(
-                    "border-b border-border/70 transition-all duration-150 hover:bg-primary/5 hover:shadow-[inset_2px_0_0_0_var(--color-primary)] data-[state=selected]:bg-muted",
-                    isTop && "bg-brand-accent/5 shadow-[inset_2px_0_0_0_var(--color-brand-accent)]"
+                    "border-b border-border/70 transition-all duration-150 hover:bg-primary/5 [&:hover>td:first-child]:shadow-[inset_2px_0_0_0_var(--color-primary)] data-[state=selected]:bg-muted",
+                    isTop && "bg-brand-accent/5 [&>td:first-child]:shadow-[inset_2px_0_0_0_var(--color-brand-accent)]"
                   )}
                 >
                   <TableCell className="tabular-nums text-muted-foreground">

@@ -125,7 +125,7 @@ export function LineupCard({
                     {assignment.player_name}
                     {assignment.is_swap && (
                       <ArrowLeftRight
-                        className="ml-1.5 inline-block h-3 w-3 text-brand-accent-foreground"
+                        className="ml-1.5 inline-block h-3 w-3 text-brand-accent"
                         aria-hidden="true"
                       />
                     )}

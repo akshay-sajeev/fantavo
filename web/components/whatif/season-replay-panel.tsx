@@ -89,7 +89,7 @@ export function SeasonReplayPanel({ leagueId }: { leagueId: number }) {
       {state.status === "done" && (
         <div className="space-y-3">
           <div className="flex items-start gap-3 rounded-lg border border-brand-accent/40 bg-brand-accent/10 p-4 text-sm">
-            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-brand-accent-foreground" aria-hidden="true" />
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-brand-accent" aria-hidden="true" />
             <div>
               <p className="font-medium text-foreground">{state.result.note}</p>
               <p className="mt-1 text-xs text-muted-foreground">

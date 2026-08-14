@@ -44,7 +44,7 @@ function riskBand(riskRating: number): { label: string; className: string } {
   if (riskRating >= 0.05) {
     return {
       label: "Moderate risk",
-      className: "bg-brand-accent/15 text-brand-accent-foreground border-brand-accent/40",
+      className: "bg-brand-accent/15 text-brand-accent border-brand-accent/40",
     };
   }
   return { label: "Low risk", className: "bg-primary/10 text-primary border-primary/25" };

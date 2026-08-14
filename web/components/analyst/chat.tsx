@@ -102,7 +102,7 @@ export function AnalystChat({
       <div className="max-h-[60vh] min-h-[16rem] space-y-4 overflow-y-auto p-4">
         {messages.length === 0 && (
           <div className="flex flex-col items-center gap-3 py-8 text-center">
-            <Sparkles className="h-8 w-8 text-brand-accent-foreground" aria-hidden="true" />
+            <Sparkles className="h-8 w-8 text-brand-accent" aria-hidden="true" />
             <p className="max-w-sm text-sm text-muted-foreground">
               Ask about {teamName}&apos;s real title odds, roster weaknesses, waiver targets,
               playoff outlook, rival threats, or a specific trade. Every number in the answer

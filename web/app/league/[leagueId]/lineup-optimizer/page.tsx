@@ -130,7 +130,7 @@ export default async function LineupOptimizerPage({
         <LineupCard
           projection={optimizer.highest_upside}
           icon={Rocket}
-          accentClassName="bg-brand-accent/20 text-brand-accent-foreground"
+          accentClassName="bg-brand-accent/20 text-brand-accent"
           subtitle={
             tradeoff.upsideTitleDeltaPts > 0.3
               ? `Maximizes championship equity: +${tradeoff.upsideTitleDeltaPts.toFixed(1)} pts of simulated title odds versus your current lineup.`

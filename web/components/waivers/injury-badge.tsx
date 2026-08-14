@@ -27,7 +27,7 @@ export function InjuryBadge({ status }: { status: string | null }) {
       className={
         isHardOut
           ? "border-destructive/40 bg-destructive/10 text-destructive"
-          : "border-brand-accent/40 bg-brand-accent/10 text-brand-accent-foreground"
+          : "border-brand-accent/40 bg-brand-accent/10 text-brand-accent"
       }
     >
       {isHardOut ? (

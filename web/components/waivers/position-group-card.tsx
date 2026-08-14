@@ -36,7 +36,7 @@ export function PositionGroupCard({ group }: { group: WaiverPositionGroup }) {
         : "border-l-4 border-l-primary/40 bg-primary/5";
   const labelClassName =
     tone === "need"
-      ? "text-brand-accent-foreground"
+      ? "text-brand-accent"
       : tone === "streaming"
         ? "text-muted-foreground"
         : "text-primary";

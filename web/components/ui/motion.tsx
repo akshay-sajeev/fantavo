@@ -41,14 +41,11 @@ export function Reveal({
   className?: string;
 }) {
   const reduceMotion = useReducedMotion();
-  if (reduceMotion) {
-    return <div className={className}>{children}</div>;
-  }
   return (
     <motion.div
       className={className}
       variants={revealContainerVariants}
-      initial="hidden"
+      initial={reduceMotion ? false : "hidden"}
       animate="show"
     >
       {children}
@@ -64,11 +61,12 @@ export function RevealItem({
   className?: string;
 }) {
   const reduceMotion = useReducedMotion();
-  if (reduceMotion) {
-    return <div className={className}>{children}</div>;
-  }
   return (
-    <motion.div className={className} variants={revealItemVariants}>
+    <motion.div
+      className={className}
+      variants={revealItemVariants}
+      initial={reduceMotion ? false : undefined}
+    >
       {children}
     </motion.div>
   );
@@ -111,10 +109,6 @@ export function TiltCard({
     y.set(0.5);
   }
 
-  if (reduceMotion) {
-    return <div className={className}>{children}</div>;
-  }
-
   return (
     <motion.div
       ref={ref}
@@ -122,9 +116,14 @@ export function TiltCard({
         "[perspective:1000px] rounded-xl transition-shadow duration-300 hover:shadow-[var(--shadow-glow-primary-lg)]",
         className
       )}
-      onPointerMove={handlePointerMove}
-      onPointerLeave={handlePointerLeave}
-      style={{ rotateX, rotateY, transformStyle: "preserve-3d" }}
+      onPointerMove={reduceMotion ? undefined : handlePointerMove}
+      onPointerLeave={reduceMotion ? undefined : handlePointerLeave}
+      style={{
+        rotateX: reduceMotion ? 0 : rotateX,
+        rotateY: reduceMotion ? 0 : rotateY,
+        transformPerspective: 1000,
+        transformStyle: "preserve-3d",
+      }}
     >
       {children}
     </motion.div>

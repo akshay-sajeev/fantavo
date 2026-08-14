@@ -13,7 +13,7 @@ import type { AnalystCitation } from "@/lib/types";
 export function StatChip({ citation }: { citation: AnalystCitation }) {
   return (
     <span
-      className="mx-0.5 inline-flex shrink-0 items-center gap-1 rounded-full border border-brand-accent/40 bg-brand-accent/15 px-1.5 py-0.5 align-baseline text-[0.8em] leading-none font-semibold text-brand-accent-foreground"
+      className="mx-0.5 inline-flex shrink-0 items-center gap-1 rounded-full border border-brand-accent/40 bg-brand-accent/15 px-1.5 py-0.5 align-baseline text-[0.8em] leading-none font-semibold text-brand-accent"
       title={`${citation.subject} — ${citation.kind.replace(/_/g, " ")} (from ${citation.source_tool})`}
     >
       <TrendingUp className="h-3 w-3 shrink-0" aria-hidden="true" />

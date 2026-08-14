@@ -17,11 +17,11 @@ export function TradeCautionList({ cautions }: { cautions: TradeCaution[] }) {
       <Card className="border-l-4 border-l-brand-accent bg-brand-accent/5">
         <CardContent className="flex items-start gap-2.5">
           <HandCoins
-            className="mt-0.5 h-4 w-4 shrink-0 text-brand-accent-foreground"
+            className="mt-0.5 h-4 w-4 shrink-0 text-brand-accent"
             aria-hidden="true"
           />
           <div className="space-y-1">
-            <p className="text-xs font-semibold tracking-wide text-brand-accent-foreground uppercase">
+            <p className="text-xs font-semibold tracking-wide text-brand-accent uppercase">
               Trade strategy
             </p>
             <p className="text-sm leading-relaxed text-foreground/90">
@@ -41,12 +41,12 @@ export function TradeCautionList({ cautions }: { cautions: TradeCaution[] }) {
         <Card key={caution.position} className="border-l-4 border-l-brand-accent bg-brand-accent/5">
           <CardContent className="flex items-start gap-2.5">
             <HandCoins
-              className="mt-0.5 h-4 w-4 shrink-0 text-brand-accent-foreground"
+              className="mt-0.5 h-4 w-4 shrink-0 text-brand-accent"
               aria-hidden="true"
             />
             <div className="space-y-1.5">
               <div className="flex flex-wrap items-center gap-1.5">
-                <p className="text-xs font-semibold tracking-wide text-brand-accent-foreground uppercase">
+                <p className="text-xs font-semibold tracking-wide text-brand-accent uppercase">
                   Don&apos;t trade away your {caution.position} depth
                 </p>
                 <Badge variant="outline" className="text-[10px]">
