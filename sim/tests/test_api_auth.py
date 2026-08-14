@@ -17,8 +17,12 @@ import psycopg
 import pytest
 
 from sim.api.auth_view import (
+    THROTTLE_MAX_FAILURES,
+    AccountLockedError,
     EmailAlreadyRegisteredError,
+    InvalidCredentialsError,
     InvalidSessionError,
+    authenticate_user,
     create_session,
     create_user,
     delete_session,
@@ -138,3 +142,56 @@ def test_create_session_token_is_never_stored_raw(pg_conn: psycopg.Connection[An
     assert row is not None
     assert token != row[0]
     assert token not in row[0]
+
+
+def test_authenticate_user_succeeds_with_the_right_password(
+    pg_conn: psycopg.Connection[Any],
+) -> None:
+    create_user(pg_conn, "authok@example.com", "the-right-password", FIXED_NOW)
+    user = authenticate_user(pg_conn, "authok@example.com", "the-right-password", FIXED_NOW)
+    assert user.email == "authok@example.com"
+
+
+def test_authenticate_user_rejects_wrong_password(pg_conn: psycopg.Connection[Any]) -> None:
+    create_user(pg_conn, "authwrong@example.com", "the-right-password", FIXED_NOW)
+    with pytest.raises(InvalidCredentialsError):
+        authenticate_user(pg_conn, "authwrong@example.com", "totally-wrong", FIXED_NOW)
+
+
+def test_authenticate_user_rejects_unknown_email(pg_conn: psycopg.Connection[Any]) -> None:
+    with pytest.raises(InvalidCredentialsError):
+        authenticate_user(pg_conn, "nobody@example.com", "whatever-password", FIXED_NOW)
+
+
+def test_five_failures_lock_the_account(pg_conn: psycopg.Connection[Any]) -> None:
+    create_user(pg_conn, "locked@example.com", "the-right-password", FIXED_NOW)
+    for _ in range(THROTTLE_MAX_FAILURES):
+        with pytest.raises(InvalidCredentialsError):
+            authenticate_user(pg_conn, "locked@example.com", "wrong", FIXED_NOW)
+    with pytest.raises(AccountLockedError):
+        authenticate_user(pg_conn, "locked@example.com", "the-right-password", FIXED_NOW)
+
+
+def test_throttling_applies_to_a_nonexistent_email_too(
+    pg_conn: psycopg.Connection[Any],
+) -> None:
+    """Failed attempts against an email with no account must lock out
+    identically -- otherwise "does this lock?" becomes an oracle for
+    "does this email have an account?"."""
+    for _ in range(THROTTLE_MAX_FAILURES):
+        with pytest.raises(InvalidCredentialsError):
+            authenticate_user(pg_conn, "neveramember@example.com", "wrong", FIXED_NOW)
+    with pytest.raises(AccountLockedError):
+        authenticate_user(pg_conn, "neveramember@example.com", "wrong", FIXED_NOW)
+
+
+def test_successful_login_clears_the_failure_count(pg_conn: psycopg.Connection[Any]) -> None:
+    create_user(pg_conn, "recovers@example.com", "the-right-password", FIXED_NOW)
+    for _ in range(THROTTLE_MAX_FAILURES - 1):
+        with pytest.raises(InvalidCredentialsError):
+            authenticate_user(pg_conn, "recovers@example.com", "wrong", FIXED_NOW)
+    # One more failure would have locked it -- a correct password instead:
+    authenticate_user(pg_conn, "recovers@example.com", "the-right-password", FIXED_NOW)
+    # And the count is now reset, so a single subsequent failure doesn't lock:
+    with pytest.raises(InvalidCredentialsError):
+        authenticate_user(pg_conn, "recovers@example.com", "wrong", FIXED_NOW)

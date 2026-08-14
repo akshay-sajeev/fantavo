@@ -197,3 +197,90 @@ def delete_session(conn: psycopg.Connection[Any], token: str) -> None:
     token_hash = _hash_token(token)
     with conn.transaction():
         conn.execute("DELETE FROM user_session WHERE token_hash = %s", (token_hash,))
+
+
+def _raise_if_locked(conn: psycopg.Connection[Any], email_norm: str, now: datetime) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT locked_until FROM login_throttle WHERE email_norm = %s", (email_norm,)
+        )
+        row = cur.fetchone()
+    if row is not None and row[0] is not None and row[0] > now:
+        raise AccountLockedError("too many failed login attempts -- try again later")
+
+
+def _record_failed_login(
+    conn: psycopg.Connection[Any], email_norm: str, now: datetime
+) -> None:
+    """Reads the current count/window in Python and writes the new state
+    back explicitly, rather than a single clever SQL upsert -- plain
+    arithmetic over an already-known row, matching this codebase's general
+    preference (e.g. sim.api.roster_view's _positional_concentration) for
+    Python-side logic over SQL cleverness."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT failed_count, first_failed_at FROM login_throttle WHERE email_norm = %s",
+            (email_norm,),
+        )
+        row = cur.fetchone()
+
+    if row is None:  # noqa: SIM114
+        failed_count = 1
+        first_failed_at = now
+    elif (now - row[1]) > timedelta(minutes=THROTTLE_WINDOW_MINUTES):
+        failed_count = 1
+        first_failed_at = now
+    else:
+        failed_count = row[0] + 1
+        first_failed_at = row[1]
+
+    locked_until = (
+        now + timedelta(minutes=THROTTLE_LOCKOUT_MINUTES)
+        if failed_count >= THROTTLE_MAX_FAILURES
+        else None
+    )
+
+    with conn.transaction():
+        conn.execute(
+            """
+            INSERT INTO login_throttle (email_norm, failed_count, first_failed_at, locked_until)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (email_norm) DO UPDATE SET
+                failed_count = EXCLUDED.failed_count,
+                first_failed_at = EXCLUDED.first_failed_at,
+                locked_until = EXCLUDED.locked_until
+            """,
+            (email_norm, failed_count, first_failed_at, locked_until),
+        )
+
+
+def _clear_throttle(conn: psycopg.Connection[Any], email_norm: str) -> None:
+    with conn.transaction():
+        conn.execute("DELETE FROM login_throttle WHERE email_norm = %s", (email_norm,))
+
+
+def authenticate_user(
+    conn: psycopg.Connection[Any], email: str, password: str, now: datetime
+) -> AuthedUser:
+    """Raises AccountLockedError BEFORE ever checking the password if this
+    email is currently locked out -- a locked account's 6th attempt must
+    not verify the password at all, correct or not. Raises
+    InvalidCredentialsError, identically, for both an unknown email and a
+    known email with the wrong password -- see that exception's docstring
+    for why they must not be distinguishable."""
+    email_norm = normalize_email(email)
+    _raise_if_locked(conn, email_norm, now)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT user_id, email, password_hash FROM app_user WHERE email_norm = %s",
+            (email_norm,),
+        )
+        row = cur.fetchone()
+
+    if row is not None and verify_password(password, row[2]):
+        _clear_throttle(conn, email_norm)
+        return AuthedUser(user_id=row[0], email=row[1])
+
+    _record_failed_login(conn, email_norm, now)
+    raise InvalidCredentialsError("invalid email or password")
