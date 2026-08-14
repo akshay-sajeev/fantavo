@@ -1,5 +1,7 @@
+import { redirect } from "next/navigation";
 import { LeagueNav } from "@/components/shared/league-nav";
 import { PageTransition } from "@/components/shared/page-transition";
+import { getCurrentUser } from "@/lib/auth";
 
 export default async function LeagueLayout({
   children,
@@ -8,6 +10,11 @@ export default async function LeagueLayout({
   children: React.ReactNode;
   params: Promise<{ leagueId: string }>;
 }) {
+  // The authoritative check -- middleware.ts only verified the cookie
+  // exists; this actually validates it against the sim API.
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
   const { leagueId } = await params;
 
   return (
