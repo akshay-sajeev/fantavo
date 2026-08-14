@@ -1,4 +1,5 @@
 import { LeagueNav } from "@/components/shared/league-nav";
+import { PageTransition } from "@/components/shared/page-transition";
 
 export default async function LeagueLayout({
   children,
@@ -13,7 +14,7 @@ export default async function LeagueLayout({
     <div className="flex w-full flex-1">
       <LeagueNav leagueId={Number(leagueId)} />
       <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-4 py-4">
-        {children}
+        <PageTransition>{children}</PageTransition>
       </div>
     </div>
   );
