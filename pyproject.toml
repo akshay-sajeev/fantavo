@@ -19,6 +19,14 @@ dependencies = [
     # phase's own new, load-bearing dependency, not part of the pre-Phase-13
     # ad-hoc-installed set this file's own comment above describes.
     "argon2-cffi>=23.1.0",
+    # Fernet symmetric encryption for per-user ESPN credentials at rest
+    # (Auth Phase B) -- see sim/api/crypto.py.
+    "cryptography>=42.0.0",
+    # ESPN's live fantasy API client (Auth Phase B: ingest/espn_client.py).
+    # requests was already used ad hoc by scripts/fetch_fixture.py (a
+    # pre-Phase-13 dev-only script); this phase is what makes it a real,
+    # load-bearing production dependency, so it gets a real entry now.
+    "requests>=2.31.0",
 ]
 
 [tool.pytest.ini_options]
@@ -41,6 +49,14 @@ ignore_missing_imports = true
 # scipy.stats.gamma.ppf, not worth vendoring stubs for one function.
 [[tool.mypy.overrides]]
 module = "scipy.*"
+ignore_missing_imports = true
+
+# requests ships no inline type stubs and the separate types-requests
+# package isn't installed -- ingest/espn_client.py calls only
+# requests.Session.get/.get, not worth vendoring stubs for (same reasoning
+# as the apscheduler override above).
+[[tool.mypy.overrides]]
+module = "requests.*"
 ignore_missing_imports = true
 
 [tool.ruff]
