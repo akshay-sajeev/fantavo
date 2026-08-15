@@ -29,27 +29,9 @@ from typing import Any
 
 import requests
 
-BASE = "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl"
+from ingest.espn_client import EspnAuthenticationError, EspnFetchError, fetch_live_league
+
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
-
-VIEWS = [
-    "mTeam",
-    "mRoster",
-    "mMatchup",
-    "mMatchupScore",
-    "mSettings",
-    "mStandings",
-    "mDraftDetail",
-    "mStatus",
-]
-
-FREE_AGENT_FILTER = {
-    "players": {
-        "filterStatus": {"value": ["FREEAGENT", "WAIVERS"]},
-        "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
-        "limit": 300,
-    }
-}
 
 # Keys whose values identify a real person. Fixtures get committed to the repo, so
 # these are pseudonymized rather than kept.
@@ -143,35 +125,6 @@ def load_env() -> dict[str, str]:
     }
 
 
-def fetch(season: int, league_id: str, cookies: dict[str, str]) -> dict[str, Any]:
-    url = f"{BASE}/seasons/{season}/segments/0/leagues/{league_id}"
-    params = [("view", v) for v in VIEWS]
-
-    response = requests.get(url, params=params, cookies=cookies, timeout=30)
-    if response.status_code == 401:
-        raise SystemExit(
-            "401 from ESPN. For a private league you need valid ESPN_S2 and SWID "
-            "cookies; they expire, so re-copy them from your browser."
-        )
-    response.raise_for_status()
-    league = response.json()
-
-    # Free agents come from the same endpoint but need the X-Fantasy-Filter header.
-    fa = requests.get(
-        url,
-        params=[("view", "kona_player_info")],
-        cookies=cookies,
-        headers={"X-Fantasy-Filter": json.dumps(FREE_AGENT_FILTER)},
-        timeout=30,
-    )
-    if fa.ok:
-        league["_freeAgents"] = fa.json().get("players", [])
-    else:
-        print(f"  warning: free agent fetch returned {fa.status_code}, skipping")
-
-    return league
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--season", type=int, default=2026)
@@ -179,15 +132,23 @@ def main() -> None:
     args = parser.parse_args()
 
     env = load_env()
-    cookies = {}
     if env["espn_s2"] and env["swid"]:
-        cookies = {"espn_s2": env["espn_s2"], "SWID": env["swid"]}
         print("Using cookies for private league access.")
     else:
         print("No cookies found; assuming a public league.")
 
     print(f"Fetching league {env['league_id']}, season {args.season}...")
-    raw = fetch(args.season, env["league_id"], cookies)
+    try:
+        raw = fetch_live_league(
+            int(env["league_id"]), args.season, env["espn_s2"] or None, env["swid"] or None
+        )
+    except EspnAuthenticationError:
+        raise SystemExit(
+            "401 from ESPN. For a private league you need valid ESPN_S2 and SWID "
+            "cookies; they expire, so re-copy them from your browser."
+        ) from None
+    except EspnFetchError as exc:
+        raise SystemExit(f"Fetch failed: {exc}") from None
 
     cleaned = scrub(raw)
     assert_clean(cleaned, [env["espn_s2"], env["swid"]])
