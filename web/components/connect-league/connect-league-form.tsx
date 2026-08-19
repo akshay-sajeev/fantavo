@@ -2,9 +2,10 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertTriangle, Info, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 /**
  * Posts to /api/leagues/connect. On success, navigates to
@@ -48,9 +49,24 @@ export function ConnectLeagueForm() {
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-4">
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="connect-league-id" className="text-sm font-medium text-foreground">
-          League ID
-        </label>
+        <div className="flex items-center gap-1.5">
+          <label htmlFor="connect-league-id" className="text-sm font-medium text-foreground">
+            League ID
+          </label>
+          <Tooltip>
+            <TooltipTrigger
+              type="button"
+              aria-label="Where to find your League ID"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <Info className="h-3.5 w-3.5" aria-hidden="true" />
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              Find this in your league&apos;s URL on ESPN:
+              fantasy.espn.com/football/league?leagueId=123456
+            </TooltipContent>
+          </Tooltip>
+        </div>
         <Input
           id="connect-league-id"
           type="text"
@@ -62,9 +78,24 @@ export function ConnectLeagueForm() {
         />
       </div>
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="connect-espn-s2" className="text-sm font-medium text-foreground">
-          espn_s2 <span className="text-muted-foreground">(private leagues only)</span>
-        </label>
+        <div className="flex items-center gap-1.5">
+          <label htmlFor="connect-espn-s2" className="text-sm font-medium text-foreground">
+            espn_s2 <span className="text-muted-foreground">(private leagues only)</span>
+          </label>
+          <Tooltip>
+            <TooltipTrigger
+              type="button"
+              aria-label="Where to find espn_s2"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <Info className="h-3.5 w-3.5" aria-hidden="true" />
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              A cookie ESPN sets when you&apos;re signed in. In your browser: DevTools →
+              Application (or Storage) → Cookies → espn.com → copy the value of espn_s2.
+            </TooltipContent>
+          </Tooltip>
+        </div>
         <Input
           id="connect-espn-s2"
           type="password"
@@ -76,9 +107,25 @@ export function ConnectLeagueForm() {
         />
       </div>
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="connect-swid" className="text-sm font-medium text-foreground">
-          SWID <span className="text-muted-foreground">(private leagues only)</span>
-        </label>
+        <div className="flex items-center gap-1.5">
+          <label htmlFor="connect-swid" className="text-sm font-medium text-foreground">
+            SWID <span className="text-muted-foreground">(private leagues only)</span>
+          </label>
+          <Tooltip>
+            <TooltipTrigger
+              type="button"
+              aria-label="Where to find SWID"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <Info className="h-3.5 w-3.5" aria-hidden="true" />
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              Also in ESPN&apos;s cookies for espn.com, next to espn_s2. Copy it exactly as
+              shown, including the curly braces — e.g.{" "}
+              {"{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}"}.
+            </TooltipContent>
+          </Tooltip>
+        </div>
         <Input
           id="connect-swid"
           type="password"
