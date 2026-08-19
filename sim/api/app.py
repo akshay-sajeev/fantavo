@@ -72,6 +72,7 @@ from sim.api.beat_my_league_view import (
 )
 from sim.api.beat_my_league_view import UnknownTeamError as BeatMyLeagueUnknownTeamError
 from sim.api.cache import read_cached_simulation, serialize_result
+from sim.api.crypto import CredentialEncryptionError
 from sim.api.draft_autopsy_view import (
     DraftAutopsy,
     DraftPickGrade,
@@ -1246,6 +1247,13 @@ def connect_league_route(
         )
     except league_connection_view.LeagueConnectionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except CredentialEncryptionError as exc:
+        # A server misconfiguration (missing/invalid CREDENTIAL_ENCRYPTION_KEY),
+        # not a caller error -- same 500-with-str(exc) shape as
+        # AnalystConfigError below. The exception's own message never includes
+        # the key or the credential (see sim.api.crypto), so surfacing it is
+        # safe and tells the operator exactly what to fix.
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     return ConnectLeagueResponseOut(
         teams=[TeamOptionOut(team_id=t.team_id, name=t.name) for t in teams]
     )

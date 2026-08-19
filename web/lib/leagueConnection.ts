@@ -23,3 +23,19 @@ export const getLeagueConnection = cache(async (): Promise<LeagueConnection | nu
     return null;
   }
 });
+
+/**
+ * Auth Phase B's per-league authorization check (added in the final-review
+ * fix wave). Verifies the signed-in user's own connected league actually
+ * matches the leagueId in the URL. Every /league/{id}/* page (via the
+ * shared layout) and every /api/league/{id}/* Route Handler (client-side
+ * fetches, not covered by middleware.ts's matcher -- see
+ * web/middleware.ts's own docstring) must call this before touching
+ * leagueId. Deliberately does NOT itself check whether the caller is
+ * signed in at all -- call getCurrentUser() first, as every existing call
+ * site already does.
+ */
+export async function ownsLeague(leagueId: number): Promise<boolean> {
+  const connection = await getLeagueConnection();
+  return connection?.league_id === leagueId;
+}

@@ -16,7 +16,7 @@ uvicorn sim.api.app:app --host 127.0.0.1 --port 8123
 Then, from this directory:
 
 ```bash
-cp .env.example .env.local   # adjust SIM_API_URL / DEFAULT_LEAGUE_ID if needed
+cp .env.example .env.local   # adjust SIM_API_URL if needed
 npm install
 npm run dev
 ```

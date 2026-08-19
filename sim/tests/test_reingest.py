@@ -11,6 +11,8 @@ from typing import Any
 import psycopg
 import pytest
 
+from ingest.db import ingest_league
+from ingest.errors import IngestError
 from ingest.espn_client import EspnFetchError
 from sim.api import auth_view, league_connection_view, reingest
 from sim.api.reingest import reingest_all_connected_users, reingest_user
@@ -34,6 +36,13 @@ def test_reingest_user_re_ingests_the_connected_league(
     monkeypatch.setattr(league_connection_view, "fetch_live_league", lambda *a, **k: raw_fixture)
     user_id = _make_connected_user(pg_conn, "reingest1@example.com", raw_fixture)
 
+    # Deliberately corrupt the stored season to a stale value, so the
+    # assertion below proves espn_season_id is actively re-derived from what
+    # ingest_league really parsed rather than trusted as-stored (Item 3 of
+    # the final-review fix wave: a season rollover must not leave a
+    # connected user re-fetching last season forever).
+    pg_conn.execute("UPDATE app_user SET espn_season_id = 1999 WHERE user_id = %s", (user_id,))
+
     monkeypatch.setattr(reingest, "fetch_live_league", lambda *a, **k: raw_fixture)
     later = datetime(2026, 6, 2, tzinfo=timezone.utc)
     reingest_user(pg_conn, user_id, later)
@@ -47,6 +56,12 @@ def test_reingest_user_re_ingests_the_connected_league(
     assert row is not None
     (ingested_at,) = row
     assert ingested_at == later
+
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT espn_season_id FROM app_user WHERE user_id = %s", (user_id,))
+        season_row = cur.fetchone()
+    assert season_row is not None
+    assert season_row[0] == raw_fixture["seasonId"]
 
 
 def test_reingest_all_connected_users_skips_a_failing_user_and_continues(
@@ -77,5 +92,34 @@ def test_reingest_all_connected_users_skips_a_failing_user_and_continues(
     # league_id, so ingested_at ends up identical either way) -- the real
     # claim is that reingest_all_connected_users itself did not raise and
     # processed both users despite one EspnFetchError.
+    assert call_count["n"] == 2
+    assert failing_user_id != ok_user_id  # sanity: two distinct users were created
+
+
+def test_reingest_all_connected_users_skips_a_user_whose_ingest_fails(
+    pg_conn: psycopg.Connection[Any], raw_fixture: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IngestError (e.g. a malformed ESPN payload) is isolated per user just
+    like EspnFetchError -- one bad payload must not abort the whole batch.
+    Same structure as the EspnFetchError test above, one layer deeper."""
+    monkeypatch.setattr(league_connection_view, "fetch_live_league", lambda *a, **k: raw_fixture)
+    failing_user_id = _make_connected_user(pg_conn, "badpayload@example.com", raw_fixture)
+    ok_user_id = _make_connected_user(pg_conn, "goodpayload@example.com", raw_fixture)
+    pg_conn.commit()
+
+    monkeypatch.setattr(reingest, "fetch_live_league", lambda *a, **k: raw_fixture)
+
+    call_count = {"n": 0}
+
+    def _flaky_ingest(*args: Any, **kwargs: Any) -> Any:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise IngestError("simulated malformed ESPN payload")
+        return ingest_league(*args, **kwargs)
+
+    monkeypatch.setattr(reingest, "ingest_league", _flaky_ingest)
+
+    reingest_all_connected_users(pg_conn, datetime(2026, 6, 2, tzinfo=timezone.utc))
+
     assert call_count["n"] == 2
     assert failing_user_id != ok_user_id  # sanity: two distinct users were created

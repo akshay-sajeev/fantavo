@@ -5,6 +5,7 @@ import { ThreatCard } from "@/components/beat-my-league/threat-card";
 import { TeamNavSelect } from "@/components/shared/team-nav-select";
 import { TradeCautionList } from "@/components/beat-my-league/trade-caution-list";
 import { ApiErrorPanel } from "@/components/shared/api-error-panel";
+import { getLeagueConnection } from "@/lib/leagueConnection";
 
 /**
  * Beat My League: for every team, title odds / structural strengths &
@@ -15,8 +16,15 @@ import { ApiErrorPanel } from "@/components/shared/api-error-panel";
  * module docstring for the full methodology. Server-rendered per selected
  * team (searchParams.team), the same URL-driven pattern this app's other
  * per-team analysis pages (Lineup Optimizer, Waiver Intelligence) already
- * use, since there's no logged-in identity to determine "the user's team"
- * automatically (docs/decisions.md Phase 5b).
+ * use.
+ *
+ * Auth Phase B: this is the one page where the connected user's own picked
+ * team (`getLeagueConnection().team_id`) is used as the *default*
+ * selection -- this page's whole framing is "your team versus the rest of
+ * the league" (note its "Choose your team" label, unlike the other pages'
+ * "Choose a team"), so defaulting to an arbitrary teams[0] was the least
+ * defensible here. An explicit `?team=` still wins; the connected team is
+ * only the fallback, replacing what used to be teams[0].
  */
 export default async function BeatMyLeaguePage({
   params,
@@ -49,7 +57,11 @@ export default async function BeatMyLeaguePage({
     );
   }
 
-  const requestedTeamId = team ? Number(team) : undefined;
+  // Precedence: explicit ?team= > the user's own connected team > teams[0].
+  // teams[0] stays as the last resort for the case where the connected team
+  // isn't in this roster payload.
+  const connection = await getLeagueConnection();
+  const requestedTeamId = team ? Number(team) : (connection?.team_id ?? undefined);
   const selectedTeamId =
     teams.find((t) => t.team_id === requestedTeamId)?.team_id ?? teams[0].team_id;
 

@@ -2512,5 +2512,65 @@ sub-feature; nothing needs undoing when that day comes.
   session tokens. `mypy --strict sim ingest` and `ruff check` clean on new
   and touched files; `npx tsc --noEmit` and `npx eslint .` clean in `/web`.
   Live verification against real ESPN leagues (public and private, per the
-  design doc's Verification section) performed during the original
-  implementation.
+  design doc's Verification section) is **still pending manual verification
+  by the project owner** -- it could not be performed during implementation
+  (no real ESPN credentials are available to an agentic worker, and
+  CLAUDE.md forbids live ESPN calls during development), and the plan's
+  final verification task flagged it for the owner rather than doing it.
+  Every automated claim above is asserted in the test suite; this one is
+  not, and is the only part of this phase never exercised against real
+  ESPN.
+- **Final whole-branch review fix wave** (after all 12 plan tasks were
+  implemented and individually reviewed) closed one Critical and several
+  smaller findings:
+  - **Per-league authorization.** Any signed-in user could previously read
+    any other user's connected league by navigating to
+    `/league/{their-league-id}`. `ownsLeague()`
+    (`web/lib/leagueConnection.ts`) now compares the caller's own connected
+    `league_id` to the one in the URL, enforced at the two choke points all
+    browser traffic funnels through: `web/app/league/[leagueId]/layout.tsx`
+    (redirect to `/`, reusing `app/page.tsx`'s existing routing) and all 3
+    `/api/league/[leagueId]/*` Route Handlers (401 when signed out, 403 when
+    not the owner). Deliberately **not** applied to the sim API's 12
+    pre-existing `/league/{league_id}/*` routes: that service binds to
+    `127.0.0.1:8123` and is reachable only by the Next.js server, so the web
+    layer is the real perimeter, and retrofitting auth onto routes that
+    predate Phase A was judged too large a blast radius for a fix wave.
+  - **Broader per-user error isolation in the re-ingest job.**
+    `sim/api/reingest.py` caught only `EspnFetchError`, so a rotated
+    `CREDENTIAL_ENCRYPTION_KEY` (`CredentialEncryptionError`) or one
+    malformed ESPN payload (`IngestError`) would abort the entire batch
+    instead of skipping one user. Now uses a `_SKIPPABLE_ERRORS` tuple
+    mirroring `sim/api/precompute.py`'s, the module it claims to mirror.
+  - **Season-boundary re-resolution.** `reingest_user` re-used the
+    `espn_season_id` stored at connect time forever, so every connected user
+    would have kept re-fetching last season's data indefinitely once a new
+    NFL season started. It now calls `resolve_current_season_id(now)` fresh
+    on every run and writes back the season `ingest_league` actually parsed
+    out of the real response (not the guessed value). A fetch that fails
+    because the new season isn't live on ESPN yet is just this cycle's
+    ordinary per-user skip.
+  - **Scheduler ordering.** Both jobs previously fired at the same instant
+    every 6 hours, so under READ COMMITTED a precompute run could straddle a
+    re-ingest commit and cache a simulation built from a mixed snapshot. The
+    two `IntervalTrigger`s are now anchored at different `start_date`s
+    (`PRECOMPUTE_OFFSET_MINUTES = 15`); since an interval trigger repeats
+    from its own `start_date`, the offset holds on every future cycle, not
+    just the first. Note the APScheduler gotcha found while verifying this:
+    an `IntervalTrigger` only honors a `start_date` still in the *future* --
+    one already in the past is rounded forward by a whole interval -- so
+    anchoring re-ingest at exactly `now` pushed its first run out a full 6
+    hours and let precompute overtake it. Hence
+    `REINGEST_STARTUP_LEAD_SECONDS`. This is also why neither job ever
+    actually ran "once immediately" at startup as the old docstring
+    claimed; both now fire shortly after startup, in order.
+  - Smaller fixes in the same pass: `CredentialEncryptionError` is now
+    caught in `connect_league_route` (500, mirroring `AnalystConfigError`)
+    instead of propagating unhandled; the `espn_s2`/`SWID` inputs are
+    `type="password"` with autofill and spellcheck off; two
+    `assert row is not None` narrowings became explicit raises (asserts are
+    stripped under `python -O`); the connected user's own team is now the
+    *default* selection on Beat My League (an explicit `?team=` still wins),
+    the first feature to actually consume the `espn_team_id` the pick-team
+    step captures; and the last stale `DEFAULT_LEAGUE_ID` references were
+    removed from `web/.env.example` and `web/README.md`.

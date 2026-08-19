@@ -15,6 +15,7 @@ queue or a `pg_cron`-style DB-scheduled job would be the right fix.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -40,6 +41,22 @@ REINGEST_INTERVAL_HOURS = 6
 
 REINGEST_JOB_ID = "reingest_all_connected_users"
 
+# Re-ingest starts first; precompute is offset behind it by this much every
+# cycle, so a precompute run never straddles a re-ingest commit for the same
+# league under READ COMMITTED. Generous enough for a full re-ingest pass
+# across all connected users at this project's hobby scale; revisit if that
+# assumption stops holding.
+PRECOMPUTE_OFFSET_MINUTES = 15
+
+# APScheduler's IntervalTrigger only honors a `start_date` that is still in
+# the future: a start_date already in the past is rounded *forward* by a
+# whole interval (see IntervalTrigger.get_next_fire_time). Anchoring
+# re-ingest at exactly `now` therefore pushed its first run out a full
+# REINGEST_INTERVAL_HOURS and let precompute overtake it -- the opposite of
+# the intended ordering. A small lead keeps the anchor in the future so both
+# first runs happen shortly after startup, in the right order.
+REINGEST_STARTUP_LEAD_SECONDS = 30
+
 
 def _run_precompute_job(dsn: str) -> None:
     with connect(dsn) as conn:
@@ -52,27 +69,36 @@ def _run_reingest_job(dsn: str) -> None:
 
 
 def start_scheduler(dsn: str | None = None) -> BackgroundScheduler:
-    """Start the background scheduler. Runs once immediately (so a freshly
-    started API isn't serving an empty cache for a full interval) and then
-    every `PRECOMPUTE_INTERVAL_HOURS` -- APScheduler's default
-    `IntervalTrigger` behavior when no explicit `next_run_time` is given.
+    """Start the background scheduler. Re-ingest runs shortly after startup
+    (so a freshly started API isn't serving stale data for a full interval)
+    and then every `REINGEST_INTERVAL_HOURS`; precompute follows
+    `PRECOMPUTE_OFFSET_MINUTES` behind it and repeats every
+    `PRECOMPUTE_INTERVAL_HOURS`. An `IntervalTrigger` repeats from its own
+    `start_date`, so that offset holds on every future cycle -- not just the
+    first -- keeping a precompute read from straddling a re-ingest commit and
+    caching a simulation built from a mixed snapshot under READ COMMITTED.
     """
     resolved_dsn = dsn or dsn_from_env("DATABASE_URL", DEFAULT_DEV_DSN)
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(
-        _run_precompute_job,
-        "interval",
-        hours=PRECOMPUTE_INTERVAL_HOURS,
-        args=[resolved_dsn],
-        id=JOB_ID,
-        replace_existing=True,
+    reingest_start = datetime.now(timezone.utc) + timedelta(
+        seconds=REINGEST_STARTUP_LEAD_SECONDS
     )
+    scheduler = BackgroundScheduler()
     scheduler.add_job(
         _run_reingest_job,
         "interval",
         hours=REINGEST_INTERVAL_HOURS,
+        start_date=reingest_start,
         args=[resolved_dsn],
         id=REINGEST_JOB_ID,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _run_precompute_job,
+        "interval",
+        hours=PRECOMPUTE_INTERVAL_HOURS,
+        start_date=reingest_start + timedelta(minutes=PRECOMPUTE_OFFSET_MINUTES),
+        args=[resolved_dsn],
+        id=JOB_ID,
         replace_existing=True,
     )
     scheduler.start()

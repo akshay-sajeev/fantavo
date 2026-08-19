@@ -138,10 +138,13 @@ async function authedFetch(
   }
 
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    let detail = body;
+    // Named responseBody, not body: this function takes a `body` parameter
+    // (the request payload), and shadowing it here is exactly the kind of
+    // confusion that turns into a bug later.
+    const responseBody = await res.text().catch(() => "");
+    let detail = responseBody;
     try {
-      const parsed = JSON.parse(body) as { detail?: unknown };
+      const parsed = JSON.parse(responseBody) as { detail?: unknown };
       if (typeof parsed.detail === "string") detail = parsed.detail;
     } catch {
       // not JSON -- fall through and use the raw body text

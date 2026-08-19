@@ -7,6 +7,8 @@ exercise the real ingest_league() path end-to-end without a network call.
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 from collections.abc import Iterator
 from datetime import datetime, timezone
@@ -208,8 +210,17 @@ def test_leagues_me_requires_auth(client: TestClient) -> None:
 
 
 def test_leagues_connect_returns_400_with_a_specific_message_on_espn_failure(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """The failure path is where a submitted credential is most likely to
+    leak (into an error message or a log line), so this submits a
+    distinctive fake espn_s2 marker and proves that exact string appears
+    nowhere in the response body or the captured log output -- CLAUDE.md's
+    "never include them in error messages" rule, asserted end-to-end rather
+    than assumed. The marker is invented for this test; it is not a real
+    credential."""
+    fake_espn_s2 ="a-very-specific-fake-cookie-marker-xyz"
+
     def _raise(*args: Any, **kwargs: Any) -> Any:
         raise EspnAuthenticationError("bad cookies")
 
@@ -220,9 +231,18 @@ def test_leagues_connect_returns_400_with_a_specific_message_on_espn_failure(
     )
     headers = {"Authorization": f"Bearer {signup_res.json()['token']}"}
 
-    res = client.post("/leagues/connect", json={"league_id": 12345}, headers=headers)
+    with caplog.at_level(logging.DEBUG):
+        res = client.post(
+            "/leagues/connect",
+            json={"league_id": 12345, "espn_s2": fake_espn_s2},
+            headers=headers,
+        )
+
     assert res.status_code == 400
-    assert "espn_s2" not in res.json()["detail"]  # never echoes the submitted credential
+    # Never echoes the submitted credential -- anywhere in the body, not
+    # just in `detail`.
+    assert fake_espn_s2 not in json.dumps(res.json())
+    assert fake_espn_s2 not in caplog.text
 
 
 def test_leagues_team_rejects_a_fake_team_over_http(

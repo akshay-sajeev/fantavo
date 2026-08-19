@@ -67,7 +67,9 @@ export function ConnectLeagueForm() {
         </label>
         <Input
           id="connect-espn-s2"
-          type="text"
+          type="password"
+          autoComplete="off"
+          spellCheck={false}
           value={espnS2}
           onChange={(e) => setEspnS2(e.target.value)}
           disabled={status === "loading"}
@@ -79,7 +81,9 @@ export function ConnectLeagueForm() {
         </label>
         <Input
           id="connect-swid"
-          type="text"
+          type="password"
+          autoComplete="off"
+          spellCheck={false}
           value={swid}
           onChange={(e) => setSwid(e.target.value)}
           disabled={status === "loading"}

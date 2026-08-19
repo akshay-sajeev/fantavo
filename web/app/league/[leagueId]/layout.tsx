@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { LeagueNav } from "@/components/shared/league-nav";
 import { PageTransition } from "@/components/shared/page-transition";
 import { getCurrentUser } from "@/lib/auth";
+import { ownsLeague } from "@/lib/leagueConnection";
 
 export default async function LeagueLayout({
   children,
@@ -16,6 +17,12 @@ export default async function LeagueLayout({
   if (!user) redirect("/login");
 
   const { leagueId } = await params;
+
+  // Per-league authorization: the signed-in user may only view their own
+  // connected league. Redirecting to "/" reuses app/page.tsx's existing
+  // "figure out where this signed-in user belongs" routing rather than
+  // duplicating it here.
+  if (!(await ownsLeague(Number(leagueId)))) redirect("/");
 
   return (
     <div className="flex w-full flex-1">

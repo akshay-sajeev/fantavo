@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { ApiError, postWhatif } from "@/lib/api";
+import { getCurrentUser } from "@/lib/auth";
+import { ownsLeague } from "@/lib/leagueConnection";
 import type { WhatIfCompareResponse } from "@/lib/types";
 
 /**
@@ -33,6 +35,14 @@ export async function POST(
 ) {
   const { leagueId } = await params;
   const id = Number(leagueId);
+
+  const user = await getCurrentUser();
+  if (!user) {
+    return NextResponse.json({ error: "not signed in" }, { status: 401 });
+  }
+  if (!(await ownsLeague(id))) {
+    return NextResponse.json({ error: "not authorized for this league" }, { status: 403 });
+  }
 
   let body: { season_id?: number; overrides: Record<string, number[]>; n_sims?: number };
   try {

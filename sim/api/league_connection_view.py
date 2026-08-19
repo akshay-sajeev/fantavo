@@ -132,7 +132,8 @@ def get_connection_state(conn: psycopg.Connection[Any], user_id: int) -> Connect
             (user_id,),
         )
         row = cur.fetchone()
-    assert row is not None
+    if row is None:
+        raise RuntimeError(f"app_user row missing for user_id={user_id}")
     return ConnectionState(
         league_id=row[0], season_id=row[1], team_id=row[2], connected_at=row[3]
     )

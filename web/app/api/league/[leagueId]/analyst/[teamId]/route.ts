@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { ApiError, postAnalystChat } from "@/lib/api";
+import { getCurrentUser } from "@/lib/auth";
+import { ownsLeague } from "@/lib/leagueConnection";
 import type { AnalystMessage } from "@/lib/types";
 
 /**
@@ -20,6 +22,14 @@ export async function POST(
   const { leagueId, teamId } = await params;
   const id = Number(leagueId);
   const team = Number(teamId);
+
+  const user = await getCurrentUser();
+  if (!user) {
+    return NextResponse.json({ error: "not signed in" }, { status: 401 });
+  }
+  if (!(await ownsLeague(id))) {
+    return NextResponse.json({ error: "not authorized for this league" }, { status: 403 });
+  }
 
   let body: { season_id?: number; messages?: AnalystMessage[] };
   try {
