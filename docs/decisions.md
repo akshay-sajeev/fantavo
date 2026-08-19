@@ -2695,3 +2695,95 @@ sub-feature; nothing needs undoing when that day comes.
   `sim/api/waiver_intelligence_view.py`'s `TRY004` finding) -- confirmed
   identical on `main` before this fix wave via `git stash`. `npx tsc
   --noEmit` and `npx eslint .` clean in `/web`.
+
+## Phase 19 — Vercel Serverless Migration (supersedes Railway)
+
+- **`/sim` now deploys to Vercel, alongside `/web`, reversing the previous
+  session's Railway decision (`e747df1`) -- not undoing that work.** The
+  health endpoint, production `/docs`/`/redoc`/`/openapi.json` gating, and
+  the `pyproject.toml`/`requirements.txt` dependency manifest all carry
+  over unchanged; they were always host-agnostic. Only `railway.toml`
+  (removed) and the in-process-scheduler assumption it depended on are
+  superseded.
+- **Why the reversal:** Vercel's core model is serverless functions with
+  no persistent process between requests. `sim/api/scheduler.py`'s
+  in-process APScheduler `BackgroundScheduler` -- the reason `/sim` was
+  routed to Railway in the first place -- cannot survive that model
+  unmodified. This phase does the actual rework (Vercel Cron Jobs instead
+  of an in-process scheduler) rather than keeping a second hosting
+  platform around just to dodge it.
+- **Two new stateless endpoints, `GET /internal/precompute` and
+  `GET /internal/reingest` (`sim/api/app.py`), replace the scheduler's
+  two interval jobs as Cron Jobs' fire targets.** Both call the exact same
+  `precompute_all_leagues`/`reingest_all_connected_users` functions the
+  old scheduler called -- one pass per invocation, matching what a Cron
+  trigger needs (fire once, run to completion, return). Neither function
+  itself changed.
+- **Caught during implementation, not anticipated by the original design:**
+  the design's first draft specified these two endpoints as `POST`-only,
+  copying a convention that doesn't match how Vercel Cron Jobs actually
+  work -- Vercel always invokes a Cron Job's target path with an HTTP GET
+  request, with no way to configure a different method. A POST-only route
+  would 405 every real Cron trigger before `require_cron_secret` or the
+  handler ever ran, silently breaking the exact automation this migration
+  exists to deliver. Caught by task review before merge, not found live;
+  both routes were changed to `GET` (`sim/api/app.py`), with no other
+  change to either handler's body or dependencies.
+- **`require_cron_secret` gates both new endpoints** -- not a user-facing
+  auth check (no `AuthedUser`), it exists so an arbitrary public request
+  can't repeatedly trigger a 10,000-sim Monte Carlo precompute run.
+  Verifies `Authorization: Bearer <CRON_SECRET>` against a `CRON_SECRET`
+  env var only Vercel's own Cron trigger and this deployment's config
+  know -- Vercel's documented convention for authenticating its own Cron
+  requests.
+- **`lifespan()` is now conditional, not removed.** `sim/api/scheduler.py`
+  is unchanged and still the right behavior for local development, where
+  a developer runs a persistent `uvicorn` process and benefits from
+  automatic recurring precompute/reingest with no local cron setup.
+  `_should_run_in_process_scheduler()` (`sim/api/app.py`) checks Vercel's
+  own auto-set `VERCEL=1` environment variable; `lifespan()` only starts
+  `start_scheduler()` when that helper returns `True`. Extracted as a
+  standalone function specifically so it has a direct unit test rather
+  than requiring the async context manager itself to be exercised.
+- **`api/index.py` (new, repo root) is the Vercel entry point**: a
+  4-line re-export of `sim.api.app.app`, at the exact path
+  (`api/index.py`) Vercel's Python builder is documented to look for.
+  Every existing route, dependency, and auth check is reused completely
+  unmodified -- this is deployment mechanics, not a route-level rewrite.
+- **`vercel.json` (new, repo root)** wraps `/sim`'s own Vercel project: a
+  `functions` entry pointing `api/index.py` at the `python3.12` runtime, a
+  catch-all rewrite sending every path to that one function, and two Cron
+  Job entries (`/internal/precompute`, `/internal/reingest`) on the same
+  `0 */6 * * *` cadence `PRECOMPUTE_INTERVAL_HOURS`/`REINGEST_INTERVAL_HOURS`
+  already used.
+- **Postgres: Vercel Postgres (Neon), via its pooled connection string --
+  no code change.** `get_connection` (`sim/api/app.py`) already opens one
+  `psycopg.connect(dsn)` per request via a FastAPI dependency, exactly the
+  shape Neon's pooler is designed for ("many short-lived connections").
+  `DATABASE_URL` just needs to point at the pooled endpoint once that
+  database exists.
+- **An explicitly-flagged, accepted risk, not resolved by this phase:**
+  Vercel's exact Python/FastAPI serverless mechanics -- the `vercel.json`
+  `functions`/`runtime` key shape, the `CRON_SECRET` header/scheme, and
+  the `VERCEL=1` auto-set env var -- are implemented at best-effort
+  confidence against Vercel's documented ASGI-function pattern, not
+  verified against a real deploy (this project has no Vercel account/CLI
+  set up yet, confirmed before this phase started -- no `vercel` binary,
+  no `.vercel/` directory, no existing `web/vercel.json`). The actual
+  account setup, Vercel Postgres/Neon provisioning, the two Vercel
+  projects, and running the real deploy remain manual, user-driven steps,
+  same as every other deployment-account action in this project --
+  closing this gap needs a real deploy, which is exactly what will
+  surface any correction needed.
+- **Verification**: `pytest sim/tests ingest/tests -q` all passing (328
+  tests, including the new `sim/tests/test_api_internal.py` and
+  `sim/tests/test_vercel_entrypoint.py`); `mypy --strict sim ingest api`
+  and `ruff check sim ingest db scripts api` show no new errors beyond the
+  same pre-existing baseline present before this phase (`sim/engine.py` and
+  `sim/tests/test_engine.py` missing `ndarray`/`dict` type arguments;
+  `scripts/regenerate_golden.py`'s unused `noqa` directives;
+  `sim/api/waiver_intelligence_view.py`'s `TRY004` finding) -- confirmed
+  identical on `main` before this phase via `git stash`. TypeScript error
+  in `/web/app/layout.tsx` pre-exists this branch; `npx tsc --noEmit`
+  verified pre-existing via `git stash`. No `/web` files changed in this
+  phase. `npx eslint .` clean in `/web`.
