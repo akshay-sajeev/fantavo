@@ -10,7 +10,7 @@ requires-python = ">=3.12"
 # below broke that pattern one phase's own new dependency at a time. The
 # rest of this list -- every remaining runtime package /sim actually
 # imports -- was backfilled in the deployment phase (Auth Phase C's
-# follow-up): Railway's build needs a real, complete manifest to install
+# follow-up): a deployed build needs a real, complete manifest to install
 # from, unlike a local dev machine where ad hoc `pip install` accumulates
 # invisibly over many sessions. Floors are the versions this repo is
 # actually developed and tested against, not invented minimums. Dev-only

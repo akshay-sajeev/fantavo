@@ -2729,6 +2729,22 @@ sub-feature; nothing needs undoing when that day comes.
   exists to deliver. Caught by task review before merge, not found live;
   both routes were changed to `GET` (`sim/api/app.py`), with no other
   change to either handler's body or dependencies.
+- **Also caught during implementation: an empty `api/__init__.py`, added
+  then removed.** `api/index.py`'s new import of `sim.api.app` tripped a
+  `mypy --strict` module-resolution error -- `api/index.py` reported as
+  "found twice under different module names" -- because `api/` has no
+  `__init__.py`, and an implementer's first fix was to add one. That
+  collided with an earlier task's explicit constraint that `api/` stay an
+  implicit namespace package (matching `pythonpath = ["."]` in
+  `[tool.pytest.ini_options]`), which task review flagged as an
+  unauthorized override rather than a Phase 19 decision to make. The
+  project owner chose a no-new-file fix instead: `explicit_package_bases =
+  true` in `pyproject.toml`'s `[tool.mypy]` section, which tells mypy to
+  resolve module names from the repo root the same way `pythonpath = ["."]`
+  already does for pytest, without requiring an `__init__.py` anywhere.
+  `api/__init__.py` was deleted; `mypy --strict sim ingest api` and
+  `pytest sim/tests ingest/tests -q` both reproduce the exact same
+  pre-existing baselines with the config fix as they did with the file.
 - **`require_cron_secret` gates both new endpoints** -- not a user-facing
   auth check (no `AuthedUser`), it exists so an arbitrary public request
   can't repeatedly trigger a 10,000-sim Monte Carlo precompute run.
@@ -2754,8 +2770,15 @@ sub-feature; nothing needs undoing when that day comes.
   `functions` entry pointing `api/index.py` at the `python3.12` runtime, a
   catch-all rewrite sending every path to that one function, and two Cron
   Job entries (`/internal/precompute`, `/internal/reingest`) on the same
-  `0 */6 * * *` cadence `PRECOMPUTE_INTERVAL_HOURS`/`REINGEST_INTERVAL_HOURS`
-  already used.
+  6-hour cadence `PRECOMPUTE_INTERVAL_HOURS`/`REINGEST_INTERVAL_HOURS`
+  already used -- `reingest` at `0 */6 * * *` and `precompute` at
+  `15 */6 * * *`, carrying over `sim/api/scheduler.py`'s
+  `PRECOMPUTE_OFFSET_MINUTES = 15` stagger. Two independent Cron Jobs have
+  no shared process to enforce that offset the way `start_scheduler()`'s
+  two `IntervalTrigger`s do, so it has to be encoded directly in each
+  cron's own schedule string, or a precompute run can read under READ
+  COMMITTED while a same-cycle reingest is still mid-loop and cache a
+  simulation built from a half-updated league.
 - **Postgres: Vercel Postgres (Neon), via its pooled connection string --
   no code change.** `get_connection` (`sim/api/app.py`) already opens one
   `psycopg.connect(dsn)` per request via a FastAPI dependency, exactly the
@@ -2774,7 +2797,25 @@ sub-feature; nothing needs undoing when that day comes.
   projects, and running the real deploy remain manual, user-driven steps,
   same as every other deployment-account action in this project --
   closing this gap needs a real deploy, which is exactly what will
-  surface any correction needed.
+  surface any correction needed. Three more specific execution-model risks
+  fall under this same accepted-risk umbrella, unresolved and worth
+  checking first on the real deploy:
+  - **Bundling:** `api/index.py` imports `sim.api.app`, which lives
+    outside the `api/` directory. Vercel's Python builder bundles by
+    tracing imports from the entry point; whether it correctly pulls in
+    the full `sim/`/`ingest/` trees, or needs an explicit `includeFiles`
+    config, is unverified.
+  - **Duration limits:** both `/internal/*` handlers run an unbounded loop
+    in a single HTTP request (`precompute_all_leagues` iterates every
+    league at a large `n_sims`; `reingest_all_connected_users` makes one
+    live ESPN fetch per connected user, sequentially). Fine at current
+    scale, but `vercel.json` sets no `maxDuration`, and there's no
+    built-in retry if a Vercel plan's execution time limit is hit
+    mid-batch.
+  - **Bundle size:** the dependency list (`numpy`, `scipy`,
+    `psycopg[binary]`, `cryptography`, `argon2-cffi`, `google-genai`) is
+    nontrivial and could approach Vercel's unzipped function size limit --
+    unverified until a real deploy is attempted.
 - **Verification**: `pytest sim/tests ingest/tests -q` all passing (328
   tests, including the new `sim/tests/test_api_internal.py` and
   `sim/tests/test_vercel_entrypoint.py`); `mypy --strict sim ingest api`

@@ -1,11 +1,11 @@
-# Deployment build manifest for /sim (Railway's nixpacks Python provider
-# installs from this directly). pyproject.toml's [project.dependencies] is
-# the source of truth for versions and the reasoning behind each entry --
-# keep the two in sync when either changes. A plain requirements.txt is
-# used here rather than `pip install .` because this repo has no
-# [build-system]/packaging setup (sim/ingest were never structured as an
-# installable distribution), and nixpacks' requirements.txt path avoids
-# needing one just for deployment.
+# The runtime dependency list /sim needs, for whatever Python-based deploy
+# process installs from it (a plain requirements.txt, not a package install).
+# pyproject.toml's [project.dependencies] is the source of truth for versions
+# and the reasoning behind each entry -- keep the two in sync when either
+# changes. A plain requirements.txt is used here rather than `pip install .`
+# because this repo has no [build-system]/packaging setup (sim/ingest were
+# never structured as an installable distribution), and a requirements.txt
+# avoids needing one just for deployment.
 fastapi>=0.141.0
 uvicorn>=0.52.0
 psycopg[binary]>=3.3.0
