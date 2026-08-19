@@ -17,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from ingest.db import DEFAULT_TEST_DSN
+from scripts.ingest_synthetic_league import build_synthetic_raw_payload
 from sim.api import app as app_module
 from sim.api.schedule_view import load_schedule
 from sim.tests.conftest import ConnectedClient
@@ -85,8 +86,6 @@ def test_get_schedule_route_matches_a_direct_load_schedule_call(
     raw_fixture: dict[str, Any],
     connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
-    from scripts.ingest_synthetic_league import build_synthetic_raw_payload
-
     season_id = raw_fixture["seasonId"]
     direct = load_schedule(pg_conn, synthetic_league_id, season_id)
 

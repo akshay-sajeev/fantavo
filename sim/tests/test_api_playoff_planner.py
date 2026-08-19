@@ -24,6 +24,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from ingest.db import DEFAULT_TEST_DSN, ingest_league
+from scripts.ingest_synthetic_league import build_synthetic_raw_payload
 from sim.api import app as app_module
 from sim.api.playoff_planner_view import (
     DEFAULT_N_SIMS,
@@ -261,8 +262,6 @@ def test_synthetic_league_also_produces_a_full_playoff_plan(
     from the real league by scripts/ingest_synthetic_league.py, and it has a
     real, fully-drafted roster (just no real pick sequence) -- see
     docs/decisions.md Phase 8."""
-    from scripts.ingest_synthetic_league import build_synthetic_raw_payload
-
     synthetic = build_synthetic_raw_payload(raw_fixture)
     result = _compute_from_raw(
         synthetic, synthetic["id"], synthetic["seasonId"], n_sims=_TEST_N_SIMS
@@ -371,8 +370,6 @@ def test_get_playoff_planner_works_for_the_synthetic_league(
     raw_fixture: dict[str, Any],
     connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
-    from scripts.ingest_synthetic_league import build_synthetic_raw_payload
-
     cc = connect_as(build_synthetic_raw_payload(raw_fixture))
     response = cc.client.get(
         f"/league/{synthetic_league_id}/playoff-planner",

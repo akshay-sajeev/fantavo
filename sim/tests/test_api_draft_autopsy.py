@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 
 from ingest.db import DEFAULT_TEST_DSN, ingest_league
 from ingest.errors import DraftNotAvailableError
+from scripts.ingest_synthetic_league import build_synthetic_raw_payload
 from sim.api import app as app_module
 from sim.api.draft_autopsy_view import (
     _BENCH_BUCKET,
@@ -212,8 +213,6 @@ def test_get_draft_autopsy_returns_409_for_the_synthetic_league(
     sequence (see scripts/ingest_synthetic_league.py and this module's own
     docstring) -- this is the load-bearing 409 case PLAN.md's Phase 7 task
     description calls out explicitly."""
-    from scripts.ingest_synthetic_league import build_synthetic_raw_payload
-
     cc = connect_as(build_synthetic_raw_payload(raw_fixture))
     response = cc.client.get(
         f"/league/{synthetic_league_id}/draft-autopsy", headers=cc.headers

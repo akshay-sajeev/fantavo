@@ -20,6 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from ingest.db import DEFAULT_TEST_DSN
+from scripts.ingest_synthetic_league import build_synthetic_raw_payload
 from sim.api import app as app_module
 from sim.api.params_loader import load_league
 from sim.api.precompute import precompute_league
@@ -63,6 +64,16 @@ def test_get_simulation_returns_403_for_a_league_the_caller_does_not_own(
     assert response.status_code == 403
 
 
+def test_get_simulation_still_404s_for_an_owned_league_with_no_data_for_that_season(
+    connect_as: Callable[[dict[str, Any]], ConnectedClient], raw_fixture: dict[str, Any]
+) -> None:
+    cc = connect_as(raw_fixture)
+    response = cc.client.get(
+        f"/league/{cc.league_id}/simulation", params={"season_id": 1999}, headers=cc.headers
+    )
+    assert response.status_code == 404
+
+
 def test_get_simulation_requires_auth(client: TestClient) -> None:
     response = client.get("/league/424242/simulation")
     assert response.status_code == 401
@@ -79,8 +90,6 @@ def test_get_simulation_matches_a_direct_engine_call_with_the_same_seed(
     computed_at = datetime(2026, 6, 1, tzinfo=timezone.utc)
     seed = precompute_league(pg_conn, synthetic_league_id, season_id, computed_at, n_sims=500)
     pg_conn.commit()
-
-    from scripts.ingest_synthetic_league import build_synthetic_raw_payload
 
     cc = connect_as(build_synthetic_raw_payload(raw_fixture))
     response = cc.client.get(
@@ -122,8 +131,6 @@ def test_whatif_rejects_an_unknown_player_id(
     raw_fixture: dict[str, Any],
     connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
-    from scripts.ingest_synthetic_league import build_synthetic_raw_payload
-
     cc = connect_as(build_synthetic_raw_payload(raw_fixture))
     response = cc.client.post(
         f"/league/{synthetic_league_id}/whatif",
@@ -163,8 +170,6 @@ def test_whatif_runs_live_with_an_explicit_seed_and_returns_distributions(
     raw_fixture: dict[str, Any],
     connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
-    from scripts.ingest_synthetic_league import build_synthetic_raw_payload
-
     cc = connect_as(build_synthetic_raw_payload(raw_fixture))
     response = cc.client.post(
         f"/league/{synthetic_league_id}/whatif",
@@ -193,8 +198,6 @@ def test_whatif_with_an_explicit_seed_is_reproducible(
     raw_fixture: dict[str, Any],
     connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
-    from scripts.ingest_synthetic_league import build_synthetic_raw_payload
-
     cc = connect_as(build_synthetic_raw_payload(raw_fixture))
     payload = {"season_id": raw_fixture["seasonId"], "n_sims": 50, "seed": 99}
     first = cc.client.post(
@@ -213,8 +216,6 @@ def test_whatif_applies_a_roster_override(
     raw_fixture: dict[str, Any],
     connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
-    from scripts.ingest_synthetic_league import build_synthetic_raw_payload
-
     season_id = raw_fixture["seasonId"]
     loaded = load_league(pg_conn, synthetic_league_id, season_id)
     team_a, team_b = loaded.league.teams[0], loaded.league.teams[1]

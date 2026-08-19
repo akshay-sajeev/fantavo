@@ -1179,8 +1179,9 @@ def require_user(
     conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
 ) -> auth_view.AuthedUser:
     """Validates the bearer token against a real, non-expired session.
-    Not yet attached to any league route in Phase A -- Phase B attaches
-    this to per-league authorization."""
+    Attached directly to /leagues/* since Phase B; Phase C's
+    require_league_owner (below) depends on this and adds per-league
+    authorization on top of it for all 12 /league/{league_id}/* routes."""
     try:
         return auth_view.validate_session(conn, token, datetime.now(UTC))
     except auth_view.InvalidSessionError as exc:
@@ -1665,8 +1666,9 @@ def post_analyst_chat(
     computes anything itself, and every number in `reply` traces back to a
     real `tool_calls[i].result` field (see `AnalystChatResponse`'s field
     docs). Scoped to one team (`team_id`), the same URL-driven per-team
-    pattern every phase since Lineup Optimizer (9a) uses -- this app has no
-    auth/league-picker."""
+    pattern every phase since Lineup Optimizer (9a) uses -- this route
+    requires the caller to own the league (require_league_owner, added
+    above)."""
     try:
         resolved_season_id = resolve_season_id(conn, league_id, req.season_id)
     except LeagueNotIngestedError as exc:

@@ -21,6 +21,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from ingest.db import DEFAULT_TEST_DSN
+from scripts.ingest_synthetic_league import build_synthetic_raw_payload
 from sim.api import app as app_module
 from sim.api.season_replay_view import compute_season_replay
 from sim.tests.conftest import ConnectedClient
@@ -120,8 +121,6 @@ def test_post_season_replay_matches_a_direct_call_with_the_same_seed(
     raw_fixture: dict[str, Any],
     connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
-    from scripts.ingest_synthetic_league import build_synthetic_raw_payload
-
     season_id = raw_fixture["seasonId"]
     seed = 555
     direct = compute_season_replay(

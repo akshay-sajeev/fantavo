@@ -141,7 +141,10 @@ def connect_as(
             },
         )
         headers = {"Authorization": f"Bearer {signup_res.json()['token']}"}
-        client.post("/leagues/connect", json={"league_id": payload["id"]}, headers=headers)
+        connect_res = client.post(
+            "/leagues/connect", json={"league_id": payload["id"]}, headers=headers
+        )
+        assert connect_res.status_code == 200, connect_res.text
         return ConnectedClient(client=client, headers=headers, league_id=payload["id"])
 
     return _connect_as

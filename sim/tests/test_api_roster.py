@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 
 from ingest.db import DEFAULT_TEST_DSN, ingest_league
 from ingest.errors import MissingProjectionError
+from scripts.ingest_synthetic_league import build_synthetic_raw_payload
 from sim.api import app as app_module
 from sim.api.roster_view import _BENCH_DEPTH_RELEVANT_POSITIONS, load_team_rosters
 from sim.tests.conftest import ConnectedClient
@@ -78,8 +79,6 @@ def test_get_roster_matches_a_direct_load_team_rosters_call(
     raw_fixture: dict[str, Any],
     connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
-    from scripts.ingest_synthetic_league import build_synthetic_raw_payload
-
     season_id = raw_fixture["seasonId"]
     direct = load_team_rosters(pg_conn, synthetic_league_id, season_id)
 
