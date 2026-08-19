@@ -2766,10 +2766,29 @@ sub-feature; nothing needs undoing when that day comes.
   (`api/index.py`) Vercel's Python builder is documented to look for.
   Every existing route, dependency, and auth check is reused completely
   unmodified -- this is deployment mechanics, not a route-level rewrite.
+  **Requires the Vercel project's Root Directory to actually be the repo
+  root** (blank, not `sim`) -- `api/index.py` and `vercel.json` are
+  siblings of `sim/`, not inside it, and this repo also contains an
+  unrelated, pre-existing `sim/api/` package (the application code itself,
+  `app.py`/`auth_view.py`/etc.), easy to confuse with the new top-level
+  `api/` directory when picking a Root Directory during project setup.
+  Discovered live: an initial deploy with Root Directory set to `sim` 404'd
+  on every path, including `/health`, with Vercel's own platform-level
+  `NOT_FOUND` (not FastAPI's JSON 404) -- the request never reached the
+  function at all.
 - **`vercel.json` (new, repo root)** wraps `/sim`'s own Vercel project: a
-  `functions` entry pointing `api/index.py` at the `python3.12` runtime, a
-  catch-all rewrite sending every path to that one function, and two Cron
-  Job entries (`/internal/precompute`, `/internal/reingest`). Both carry
+  catch-all rewrite sending every path to the `api/index.py` function, and
+  two Cron Job entries (`/internal/precompute`, `/internal/reingest`).
+  **No `functions` key** -- the original draft tried
+  `"functions": {"api/index.py": {"runtime": "python3.12"}}` to pin the
+  Python version, which fails Vercel's actual deploy-time validation
+  ("Function Runtimes must have a valid version, for example
+  `now-php@1.0.0`" -- the `runtime` field expects a versioned runtime
+  identifier, `name@semver`, not a bare Python version string). Caught via
+  a real failed deploy, not a task review. Fixed by removing the
+  `functions` key entirely and pinning the Python version the way Vercel's
+  Python builder actually documents: a `.python-version` file (new, repo
+  root, pyenv-style convention) containing `3.12`. Both carry
   over `sim/api/scheduler.py`'s `PRECOMPUTE_OFFSET_MINUTES = 15` stagger --
   `reingest` at `0 3 * * *` and `precompute` 15 minutes behind it at
   `15 3 * * *`. Two independent Cron Jobs have no shared process to

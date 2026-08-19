@@ -1,7 +1,4 @@
 {
-  "functions": {
-    "api/index.py": { "runtime": "python3.12" }
-  },
   "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }],
   "crons": [
     { "path": "/internal/precompute", "schedule": "15 3 * * *" },
