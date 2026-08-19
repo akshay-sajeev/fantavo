@@ -16,16 +16,18 @@ SYNTHETIC league is what Phase 4's tests verify against.
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, NamedTuple
 
 import psycopg
 import pytest
+from fastapi.testclient import TestClient
 
 from ingest.db import DATA_TABLES, DEFAULT_TEST_DSN, ingest_league, run_migrations
 from ingest.parse import FIXTURES_DIR, load_fixture
 from scripts.ingest_synthetic_league import SYNTHETIC_LEAGUE_ID, build_synthetic_raw_payload
+from sim.api import league_connection_view
 
 TEST_DSN = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DSN)
 FIXTURE_PATH = FIXTURES_DIR / "league_raw_2026.json"
@@ -93,3 +95,53 @@ def synthetic_league_id(pg_conn: psycopg.Connection[Any], raw_fixture: dict[str,
     pg_conn.commit()
     league_id: int = SYNTHETIC_LEAGUE_ID
     return league_id
+
+
+class ConnectedClient(NamedTuple):
+    """A TestClient whose bearer token belongs to a real signed-up user who
+    has connected exactly the league described by the payload passed to
+    connect_as() -- see that fixture."""
+
+    client: TestClient
+    headers: dict[str, str]
+    league_id: int
+
+
+@pytest.fixture()
+def connect_as(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[dict[str, Any]], ConnectedClient]:
+    """Factory fixture: connect_as(payload) signs up a fresh user (a new
+    email per call, so a test connecting two different leagues in the same
+    test doesn't collide), monkeypatches fetch_live_league to return
+    `payload` verbatim, connects that user to payload["id"], and returns a
+    ConnectedClient. Pass `raw_fixture` for the real fixture league, or
+    `build_synthetic_raw_payload(raw_fixture)` (from
+    scripts.ingest_synthetic_league) for the synthetic one -- whichever
+    the test under it already uses.
+
+    Depends on the fixture literally named `client`: every test module in
+    this suite defines its own local `client` fixture (see e.g.
+    test_api_app.py) rather than sharing one from conftest.py, and pytest
+    resolves a conftest fixture's same-named dependency using whichever
+    definition is visible to the actual requesting test -- so this works
+    unmodified from every existing test file without duplicating its body.
+    """
+    call_count = 0
+
+    def _connect_as(payload: dict[str, Any]) -> ConnectedClient:
+        nonlocal call_count
+        call_count += 1
+        monkeypatch.setattr(league_connection_view, "fetch_live_league", lambda *a, **k: payload)
+        signup_res = client.post(
+            "/auth/signup",
+            json={
+                "email": f"connected-owner-{call_count}@example.com",
+                "password": "a-real-password",
+            },
+        )
+        headers = {"Authorization": f"Bearer {signup_res.json()['token']}"}
+        client.post("/leagues/connect", json={"league_id": payload["id"]}, headers=headers)
+        return ConnectedClient(client=client, headers=headers, league_id=payload["id"])
+
+    return _connect_as

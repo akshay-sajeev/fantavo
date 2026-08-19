@@ -1187,6 +1187,24 @@ def require_user(
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
+def require_league_owner(
+    league_id: int,
+    user: auth_view.AuthedUser = Depends(require_user),  # noqa: B008 (idiomatic FastAPI)
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> auth_view.AuthedUser:
+    """Phase C: the authoritative per-league authorization check every
+    /league/{league_id}/* route needs now that the sim API is no longer
+    guaranteed to be reachable only from the Next.js server. FastAPI
+    injects `league_id` from the route's own path parameter -- no caller
+    passes it explicitly. Raises 403 (never 404) for any league_id that
+    isn't this exact user's connected league, including "no connected
+    league at all" (state.league_id is None never equals a real league_id)."""
+    state = league_connection_view.get_connection_state(conn, user.user_id)
+    if state.league_id != league_id:
+        raise HTTPException(status_code=403, detail="not authorized for this league")
+    return user
+
+
 @app.post("/auth/signup", response_model=AuthResponseOut, status_code=201)
 def signup(
     body: SignupRequest,
@@ -1302,6 +1320,7 @@ def get_simulation(
     league_id: int,
     season_id: int | None = None,
     conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+    _owner: auth_view.AuthedUser = Depends(require_league_owner),  # noqa: B008 (idiomatic FastAPI)
 ) -> SimulationResponse:
     try:
         resolved_season_id = resolve_season_id(conn, league_id, season_id)
@@ -1328,6 +1347,7 @@ def post_whatif(
     league_id: int,
     req: WhatIfRequest,
     conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+    _owner: auth_view.AuthedUser = Depends(require_league_owner),  # noqa: B008 (idiomatic FastAPI)
 ) -> SimulationResponse:
     try:
         resolved_season_id = resolve_season_id(conn, league_id, req.season_id)
@@ -1626,6 +1646,7 @@ def post_analyst_chat(
     team_id: int,
     req: AnalystChatRequest,
     conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+    _owner: auth_view.AuthedUser = Depends(require_league_owner),  # noqa: B008 (idiomatic FastAPI)
 ) -> AnalystChatResponse:
     """AI league analyst: a real Gemini tool-calling loop over the six
     routes above -- see `sim.api.analyst_view` (the loop, citation

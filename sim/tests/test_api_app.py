@@ -10,7 +10,7 @@ returns title odds identical to a direct engine call with the same seed."
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from typing import Any
 
@@ -25,6 +25,7 @@ from sim.api.params_loader import load_league
 from sim.api.precompute import precompute_league
 from sim.api.seeds import precompute_seed
 from sim.engine import simulate_seasons
+from sim.tests.conftest import ConnectedClient
 
 TEST_DSN = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DSN)
 
@@ -50,9 +51,21 @@ def client(
         yield test_client
 
 
-def test_get_simulation_returns_404_for_an_uningested_league(client: TestClient) -> None:
+def test_get_simulation_returns_403_for_a_league_the_caller_does_not_own(
+    connect_as: Callable[[dict[str, Any]], ConnectedClient], raw_fixture: dict[str, Any]
+) -> None:
+    # require_league_owner runs before the route's own 404-for-uningested
+    # check, so an arbitrary (never-ingested) league_id is unreachable-404
+    # from this layer now -- it's always a 403 (not this caller's league)
+    # first. See this plan's Global Constraints for why.
+    cc = connect_as(raw_fixture)
+    response = cc.client.get("/league/424242/simulation", headers=cc.headers)
+    assert response.status_code == 403
+
+
+def test_get_simulation_requires_auth(client: TestClient) -> None:
     response = client.get("/league/424242/simulation")
-    assert response.status_code == 404
+    assert response.status_code == 401
 
 
 def test_get_simulation_matches_a_direct_engine_call_with_the_same_seed(
@@ -60,14 +73,20 @@ def test_get_simulation_matches_a_direct_engine_call_with_the_same_seed(
     pg_conn: psycopg.Connection[Any],
     synthetic_league_id: int,
     raw_fixture: dict[str, Any],
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
     season_id = raw_fixture["seasonId"]
     computed_at = datetime(2026, 6, 1, tzinfo=timezone.utc)
     seed = precompute_league(pg_conn, synthetic_league_id, season_id, computed_at, n_sims=500)
     pg_conn.commit()
 
-    response = client.get(
-        f"/league/{synthetic_league_id}/simulation", params={"season_id": season_id}
+    from scripts.ingest_synthetic_league import build_synthetic_raw_payload
+
+    cc = connect_as(build_synthetic_raw_payload(raw_fixture))
+    response = cc.client.get(
+        f"/league/{synthetic_league_id}/simulation",
+        params={"season_id": season_id},
+        headers=cc.headers,
     )
     assert response.status_code == 200
     body = response.json()
@@ -98,33 +117,59 @@ def test_get_simulation_matches_a_direct_engine_call_with_the_same_seed(
 
 
 def test_whatif_rejects_an_unknown_player_id(
-    client: TestClient, synthetic_league_id: int, raw_fixture: dict[str, Any]
+    client: TestClient,
+    synthetic_league_id: int,
+    raw_fixture: dict[str, Any],
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
-    response = client.post(
+    from scripts.ingest_synthetic_league import build_synthetic_raw_payload
+
+    cc = connect_as(build_synthetic_raw_payload(raw_fixture))
+    response = cc.client.post(
         f"/league/{synthetic_league_id}/whatif",
         json={
             "season_id": raw_fixture["seasonId"],
             "roster_overrides": {"0": [999_999_999_999]},
             "n_sims": 50,
         },
+        headers=cc.headers,
     )
     assert response.status_code == 422
 
 
-def test_whatif_rejects_an_uningested_league(raw_fixture: dict[str, Any], client: TestClient) -> None:
-    response = client.post(
+def test_whatif_returns_403_for_a_league_the_caller_does_not_own(
+    connect_as: Callable[[dict[str, Any]], ConnectedClient], raw_fixture: dict[str, Any]
+) -> None:
+    cc = connect_as(raw_fixture)
+    response = cc.client.post(
         "/league/424242/whatif",
         json={"season_id": raw_fixture["seasonId"], "n_sims": 50},
+        headers=cc.headers,
     )
-    assert response.status_code == 404
+    assert response.status_code == 403
+
+
+def test_whatif_requires_auth(client: TestClient) -> None:
+    response = client.post(
+        "/league/424242/whatif",
+        json={"season_id": 2026, "n_sims": 50},
+    )
+    assert response.status_code == 401
 
 
 def test_whatif_runs_live_with_an_explicit_seed_and_returns_distributions(
-    client: TestClient, synthetic_league_id: int, raw_fixture: dict[str, Any]
+    client: TestClient,
+    synthetic_league_id: int,
+    raw_fixture: dict[str, Any],
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
-    response = client.post(
+    from scripts.ingest_synthetic_league import build_synthetic_raw_payload
+
+    cc = connect_as(build_synthetic_raw_payload(raw_fixture))
+    response = cc.client.post(
         f"/league/{synthetic_league_id}/whatif",
         json={"season_id": raw_fixture["seasonId"], "n_sims": 50, "seed": 7},
+        headers=cc.headers,
     )
     assert response.status_code == 200
     body = response.json()
@@ -143,11 +188,21 @@ def test_whatif_runs_live_with_an_explicit_seed_and_returns_distributions(
 
 
 def test_whatif_with_an_explicit_seed_is_reproducible(
-    client: TestClient, synthetic_league_id: int, raw_fixture: dict[str, Any]
+    client: TestClient,
+    synthetic_league_id: int,
+    raw_fixture: dict[str, Any],
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
+    from scripts.ingest_synthetic_league import build_synthetic_raw_payload
+
+    cc = connect_as(build_synthetic_raw_payload(raw_fixture))
     payload = {"season_id": raw_fixture["seasonId"], "n_sims": 50, "seed": 99}
-    first = client.post(f"/league/{synthetic_league_id}/whatif", json=payload).json()
-    second = client.post(f"/league/{synthetic_league_id}/whatif", json=payload).json()
+    first = cc.client.post(
+        f"/league/{synthetic_league_id}/whatif", json=payload, headers=cc.headers
+    ).json()
+    second = cc.client.post(
+        f"/league/{synthetic_league_id}/whatif", json=payload, headers=cc.headers
+    ).json()
     assert first["teams"] == second["teams"]
 
 
@@ -156,19 +211,25 @@ def test_whatif_applies_a_roster_override(
     pg_conn: psycopg.Connection[Any],
     synthetic_league_id: int,
     raw_fixture: dict[str, Any],
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
+    from scripts.ingest_synthetic_league import build_synthetic_raw_payload
+
     season_id = raw_fixture["seasonId"]
     loaded = load_league(pg_conn, synthetic_league_id, season_id)
     team_a, team_b = loaded.league.teams[0], loaded.league.teams[1]
 
-    baseline = client.post(
+    cc = connect_as(build_synthetic_raw_payload(raw_fixture))
+
+    baseline = cc.client.post(
         f"/league/{synthetic_league_id}/whatif",
         json={"season_id": season_id, "n_sims": 2000, "seed": 123},
+        headers=cc.headers,
     ).json()
 
     # Give team_a team_b's entire roster -- if roster_overrides has no
     # effect this response would be identical to baseline.
-    overridden = client.post(
+    overridden = cc.client.post(
         f"/league/{synthetic_league_id}/whatif",
         json={
             "season_id": season_id,
@@ -176,6 +237,26 @@ def test_whatif_applies_a_roster_override(
             "seed": 123,
             "roster_overrides": {team_a.team_id: [p.player_id for p in team_b.starters]},
         },
+        headers=cc.headers,
     ).json()
 
     assert overridden != baseline
+
+
+def test_analyst_chat_requires_league_ownership(
+    connect_as: Callable[[dict[str, Any]], ConnectedClient], raw_fixture: dict[str, Any]
+) -> None:
+    cc = connect_as(raw_fixture)
+    response = cc.client.post(
+        "/league/424242/analyst/1",
+        json={"messages": [{"role": "user", "text": "hi"}]},
+        headers=cc.headers,
+    )
+    assert response.status_code == 403
+
+
+def test_analyst_chat_requires_auth(client: TestClient) -> None:
+    response = client.post(
+        "/league/424242/analyst/1", json={"messages": [{"role": "user", "text": "hi"}]}
+    )
+    assert response.status_code == 401
