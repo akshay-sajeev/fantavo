@@ -143,13 +143,11 @@ def test_refresh_returns_ok_with_odds_not_updated_for_a_not_yet_drafted_season(
     pg_conn: psycopg.Connection[Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Mirrors sim/tests/test_api_precompute.py's
-    test_precompute_all_leagues_skips_a_league_with_no_drafted_roster
-    fixture-mutation technique: a pre-draft-shaped payload (real
-    scoringSettings/schedule, drafted forced False, rosters cleared) makes
-    reingest_user's own ingest_league call raise RosterNotAvailableError
-    (a subclass of IngestError) -- a legitimate state (e.g. a new NFL
-    season that hasn't drafted yet), not a server failure."""
+    """When a pre-draft-shaped payload (drafted forced False, rosters cleared) is
+    ingested, reingest_user succeeds (ingests the league metadata), but
+    precompute_league fails because there are no rosters to compute odds for.
+    This exercises the second IngestError handler: reingest succeeded but odds
+    computation failed, so ingested_at is set (not None) but odds_updated is False."""
     monkeypatch.setattr(reingest, "fetch_live_league", lambda *a, **k: raw_fixture)
     cc = connect_as(raw_fixture)
 
@@ -171,4 +169,68 @@ def test_refresh_returns_ok_with_odds_not_updated_for_a_not_yet_drafted_season(
     body = response.json()
     assert body["status"] == "ok"
     assert body["odds_updated"] is False
-    assert body["ingested_at"] is None
+    assert body["ingested_at"] is not None
+
+    # Verify that reingest_user actually updated the league in the database
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT ingested_at FROM league WHERE league_id = %s AND season_id = %s",
+            (raw_fixture["id"], raw_fixture["seasonId"]),
+        )
+        row = cur.fetchone()
+    assert row is not None
+    (new_ingested_at,) = row
+    assert new_ingested_at > old
+
+
+def test_refresh_returns_ok_with_odds_not_updated_when_precompute_fails(
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
+    raw_fixture: dict[str, Any],
+    pg_conn: psycopg.Connection[Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercises the second IngestError handler: reingest_user succeeds
+    (real data ingested, league.ingested_at updated), but precompute_league
+    raises IngestError. The response should show that ingestion succeeded
+    (ingested_at is not None) but odds computation failed (odds_updated=False).
+    This differs from test_refresh_returns_ok_with_odds_not_updated_for_a_not_yet_
+    drafted_season, which exercises the first IngestError handler (reingest_user
+    itself fails, ingested_at stays None)."""
+    monkeypatch.setattr(reingest, "fetch_live_league", lambda *a, **k: raw_fixture)
+    cc = connect_as(raw_fixture)
+
+    old = datetime.now(timezone.utc) - timedelta(minutes=10)
+    pg_conn.execute(
+        "UPDATE league SET ingested_at = %s WHERE league_id = %s AND season_id = %s",
+        (old, raw_fixture["id"], raw_fixture["seasonId"]),
+    )
+    pg_conn.commit()
+
+    # Monkeypatch precompute_league to raise IngestError, simulating a scenario
+    # where reingest succeeds but precompute fails (e.g., a logic error in
+    # computing odds from the freshly-ingested data).
+    from ingest.errors import IngestError
+
+    def _precompute_fails(*args: Any, **kwargs: Any) -> Any:
+        raise IngestError("simulated precompute failure")
+
+    monkeypatch.setattr(app_module, "precompute_league", _precompute_fails)
+
+    response = cc.client.post(f"/league/{cc.league_id}/refresh", headers=cc.headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["odds_updated"] is False
+    assert body["ingested_at"] is not None
+
+    # Verify that reingest_user actually updated the league in the database
+    # (ingested_at should be much more recent than the old value we set).
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT ingested_at FROM league WHERE league_id = %s AND season_id = %s",
+            (raw_fixture["id"], raw_fixture["seasonId"]),
+        )
+        row = cur.fetchone()
+    assert row is not None
+    (new_ingested_at,) = row
+    assert new_ingested_at > old

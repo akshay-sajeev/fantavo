@@ -1455,9 +1455,7 @@ def refresh_league(
     try:
         precompute_league(conn, league_id, season_id, now)
     except IngestError:
-        # e.g. if the league hasn't drafted yet, precompute_league can't succeed.
-        # Treat this the same as if reingest_user had raised IngestError.
-        return RefreshLeagueResponse(status="ok", ingested_at=None, odds_updated=False)
+        return RefreshLeagueResponse(status="ok", ingested_at=now, odds_updated=False)
 
     return RefreshLeagueResponse(status="ok", ingested_at=now, odds_updated=True)
 
