@@ -601,3 +601,10 @@ export interface AnalystChatResponse {
   spans: AnalystSpan[];
   tool_calls: AnalystToolCall[];
 }
+
+/** Mirrors sim.api.app.RefreshLeagueResponse. */
+export interface RefreshLeagueResponse {
+  status: string;
+  ingested_at: string | null;
+  odds_updated: boolean;
+}
