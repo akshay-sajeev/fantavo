@@ -4,7 +4,7 @@
   },
   "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }],
   "crons": [
-    { "path": "/internal/precompute", "schedule": "15 */6 * * *" },
-    { "path": "/internal/reingest", "schedule": "0 */6 * * *" }
+    { "path": "/internal/precompute", "schedule": "15 3 * * *" },
+    { "path": "/internal/reingest", "schedule": "0 3 * * *" }
   ]
 }

@@ -2769,16 +2769,25 @@ sub-feature; nothing needs undoing when that day comes.
 - **`vercel.json` (new, repo root)** wraps `/sim`'s own Vercel project: a
   `functions` entry pointing `api/index.py` at the `python3.12` runtime, a
   catch-all rewrite sending every path to that one function, and two Cron
-  Job entries (`/internal/precompute`, `/internal/reingest`) on the same
-  6-hour cadence `PRECOMPUTE_INTERVAL_HOURS`/`REINGEST_INTERVAL_HOURS`
-  already used -- `reingest` at `0 */6 * * *` and `precompute` at
-  `15 */6 * * *`, carrying over `sim/api/scheduler.py`'s
-  `PRECOMPUTE_OFFSET_MINUTES = 15` stagger. Two independent Cron Jobs have
-  no shared process to enforce that offset the way `start_scheduler()`'s
-  two `IntervalTrigger`s do, so it has to be encoded directly in each
-  cron's own schedule string, or a precompute run can read under READ
-  COMMITTED while a same-cycle reingest is still mid-loop and cache a
-  simulation built from a half-updated league.
+  Job entries (`/internal/precompute`, `/internal/reingest`). Both carry
+  over `sim/api/scheduler.py`'s `PRECOMPUTE_OFFSET_MINUTES = 15` stagger --
+  `reingest` at `0 3 * * *` and `precompute` 15 minutes behind it at
+  `15 3 * * *`. Two independent Cron Jobs have no shared process to
+  enforce that offset the way `start_scheduler()`'s two `IntervalTrigger`s
+  do, so it has to be encoded directly in each cron's own schedule string,
+  or a precompute run can read under READ COMMITTED while a same-cycle
+  reingest is still mid-loop and cache a simulation built from a
+  half-updated league.
+  **Cadence deliberately differs from local dev's 6-hour interval**:
+  Vercel's Hobby plan caps Cron Jobs at once per day, discovered when the
+  project owner actually set up the Vercel project (not knowable from
+  `vercel.json`'s docs alone, which don't mention plan-tier limits) --
+  `PRECOMPUTE_INTERVAL_HOURS`/`REINGEST_INTERVAL_HOURS` (`sim/api/
+  scheduler.py`) stay at 6 hours unchanged, since those only govern the
+  in-process scheduler local development still uses; only the deployed
+  Cron Job schedule was reduced to once daily to fit the Hobby plan.
+  Revisit if this project ever moves to a paid Vercel plan, where the
+  original 6-hour cadence could be restored by widening `*/6` back out.
 - **Postgres: Vercel Postgres (Neon), via its pooled connection string --
   no code change.** `get_connection` (`sim/api/app.py`) already opens one
   `psycopg.connect(dsn)` per request via a FastAPI dependency, exactly the
