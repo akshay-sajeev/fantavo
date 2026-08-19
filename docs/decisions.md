@@ -2432,3 +2432,82 @@ sub-feature; nothing needs undoing when that day comes.
   (live browser walkthrough of signup/login/logout/session-expiry against the
   real running stack) performed during the original implementation, recorded
   in `.superpowers/sdd/2026-08-14-auth-phase-a-identity/progress.md`.
+
+## Phase 17 — Auth Phase B — league connection
+
+- **Every signed-up user can now connect their own real ESPN league, public
+  or private, replacing the single shared `DEFAULT_LEAGUE_ID` every account
+  saw after Phase A.** `db/migrations/0004_league_connection.sql` extends
+  `app_user` with `espn_league_id`, `espn_season_id`, `espn_team_id`,
+  Fernet-encrypted `espn_s2_encrypted`/`espn_swid_encrypted`, and
+  `league_connected_at` -- a 1:1 set of nullable columns rather than a join
+  table, since Decision 2 in the design spec fixes this at one league per
+  user. `ingest/espn_client.py` is the first reusable, live-capable ESPN
+  HTTP client (`fetch_live_league`), extracted from
+  `scripts/fetch_fixture.py`'s existing fetch/merge logic with an injectable
+  `transport` so every caller's tests still never touch the network.
+  `sim/api/league_connection_view.py` wires this into three routes on
+  `sim/api/app.py` (`POST /leagues/connect`, `POST /leagues/team`,
+  `GET /leagues/me`), all behind Phase A's `require_user()`. The web flow
+  (`/connect-league` -> `/connect-league/pick-team`) replaces the old
+  unconditional root redirect: `web/app/page.tsx` now calls `GET /leagues/me`
+  and routes a signed-in user to whichever step of connect/pick-team/real-
+  league applies. `DEFAULT_LEAGUE_ID` and the redirect it drove are gone.
+  A recurring re-ingest job on the existing `sim/api/scheduler.py`
+  `BackgroundScheduler` re-fetches every connected user's league on the same
+  6-hour `PRECOMPUTE_INTERVAL_HOURS` cadence, with per-user error isolation
+  so one user's expired cookies or a transient ESPN error never aborts the
+  batch.
+- **Credentials are encrypted at rest with Fernet, never stored or logged in
+  plaintext.** A new `CREDENTIAL_ENCRYPTION_KEY`, read via `sim/api/env.py`'s
+  existing `.env` loader alongside `GEMINI_API_KEY`, never touches the
+  database and is never logged. `espn_s2`/`SWID` are encrypted before the
+  `UPDATE app_user` in `connect_league` and decrypted only inside the
+  request handler and the recurring re-ingest job -- the same secrets
+  discipline CLAUDE.md already required for these cookies, now backed by
+  actual encryption instead of just careful logging, since this is the first
+  phase where they're a real user's live credentials at rest in production
+  rather than a project owner's own dev-only cookies.
+- **Deliberate scope limits, each already called out in the design doc's
+  Known Gaps section rather than an oversight found late:**
+  - **One league per user, no switcher.** Someone in two real ESPN leagues
+    can only connect one to fantavo today; revisit if it becomes a real
+    complaint.
+  - **No disconnect/reconnect UI.** A user whose `espn_s2`/`SWID` expire on
+    ESPN's own schedule (they're session cookies, not API keys) has no way
+    to reconnect without direct DB access; a settings page is a natural,
+    separate follow-up.
+  - **No re-ingest health visibility.** If the recurring job silently stops
+    succeeding for a user, that's only visible server-side in logs today --
+    no "last synced" indicator or expired-credentials banner in the UI.
+- **`resolve_current_season_id` (`sim/api/league_connection_view.py`)
+  simplifies "current season" to the current calendar year**, matching
+  ESPN's season-id convention (a season that runs Sept-Jan is id'd by its
+  start year). Accepted known edge case: a user connecting in the Jan-Feb
+  tail of the previous season gets the just-started, still-empty upcoming
+  season instead. Historical-season selection stays out of scope for this
+  phase.
+- **`GET /leagues/me` carries the pending team list itself, refined from the
+  design spec's exact wording during implementation planning.** The spec's
+  original `{league_id, season_id, team_id, connected_at}` shape would have
+  required the web client to carry `POST /leagues/connect`'s team list
+  across the navigation to `/connect-league/pick-team` (in memory or a query
+  param). Instead, `LeagueConnectionOut` also carries `teams`, populated by
+  `league_connection_view.list_teams_for_league` -- a fresh read of the
+  already-ingested `team` table, not a second ESPN call -- whenever a
+  connection exists but no team has been picked yet. Simpler and
+  refresh-safe (the pick-team page works after a reload, not just
+  immediately after connecting), at the cost of one extra cheap DB read on
+  that one page load.
+- **Verification**: `pytest` (sim + ingest) all passing, including new
+  coverage for `ingest/espn_client.py`'s fetch/merge against a fake
+  transport, `POST /leagues/connect`/`POST /leagues/team`/`GET /leagues/me`
+  against a live-connected app, the encryption round-trip, and the recurring
+  re-ingest job's per-user error isolation. Secret-leak assertions confirm
+  plaintext `espn_s2`/`SWID` appear nowhere in `app_user`, log output, or any
+  error message, mirroring Phase A's equivalent assertion for passwords and
+  session tokens. `mypy --strict sim ingest` and `ruff check` clean on new
+  and touched files; `npx tsc --noEmit` and `npx eslint .` clean in `/web`.
+  Live verification against real ESPN leagues (public and private, per the
+  design doc's Verification section) performed during the original
+  implementation.
