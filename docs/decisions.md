@@ -2574,3 +2574,116 @@ sub-feature; nothing needs undoing when that day comes.
     the first feature to actually consume the `espn_team_id` the pick-team
     step captures; and the last stale `DEFAULT_LEAGUE_ID` references were
     removed from `web/.env.example` and `web/README.md`.
+
+## Phase 18 — Auth Phase C — sim API authorization
+
+- **The sim API itself now enforces per-league ownership on all 12
+  `/league/{league_id}/*` routes, not just the web layer.**
+  `require_league_owner` (`sim/api/app.py`), a new dependency that itself
+  depends on Phase A's `require_user`, compares the caller's connected
+  `league_id` (via `league_connection_view.get_connection_state`) against
+  the `league_id` path parameter FastAPI injects, and raises 403 for any
+  mismatch -- including "no connected league at all," since
+  `state.league_id` being `None` never equals a real `league_id`. Every
+  web-layer caller was threaded to match: `getSessionToken()`
+  (`web/lib/api.ts`) reads the session cookie and forwards it as a bearer
+  token, now sent by all 12 `lib/api.ts` functions that call the sim API,
+  all 10 Server Component pages under `web/app/league/[leagueId]/`, and all
+  3 Route Handlers under `web/app/api/league/[leagueId]/`.
+- **Why now, not folded into Phase B's own fix wave.** Phase B's fix wave
+  explicitly declined to add auth to these same 12 routes, reasoning that
+  the sim service bound to `127.0.0.1:8123` and was reachable only by the
+  Next.js server, making the web layer's `ownsLeague()` checks the real
+  perimeter. This phase exists because that assumption is what's changing:
+  the deployment decision to host `/sim` on its own, separately-reachable
+  Railway service rather than `127.0.0.1` means the sim API can no longer
+  assume its only caller is a trusted Next.js server. This is a response to
+  a deployment-topology change, not a newly-discovered bug in Phase B.
+- **The web-layer `ownsLeague()` checks from Phase B are unchanged and
+  still run first for real users** -- `web/app/league/[leagueId]/layout.tsx`
+  and the 3 Route Handlers still redirect/401/403 before a request ever
+  reaches the sim API. `require_league_owner` is a backstop: it protects
+  anyone who reaches the sim API directly (a stale bookmark to the Railway
+  URL, a script, a misconfigured second frontend), not the primary path a
+  real browser user takes.
+- **The 404-for-uningested-league tests all became 403, permanently, and
+  that's correct, not a regression.** `require_league_owner` runs before
+  each route's own `LeagueNotIngestedError -> 404` handling, so a
+  completely uningested `league_id` is unreachable-404 from a route
+  handler now -- it can never simultaneously be the caller's own connected
+  league (a league can't be both "never ingested" and "the one this user
+  connected," since connecting a league is what triggers its first
+  ingest), so 403 fires first and is the only status code that path can
+  ever produce. This is why every one of the 10 route test files'
+  `test_*_returns_404_for_an_uningested_league` test was repurposed into
+  `test_*_returns_403_for_a_league_the_caller_does_not_own` rather than
+  kept alongside it. The *true* 404-for-uningested-season path -- a real,
+  owned league requested with a `season_id` that was never ingested for
+  it, still fully reachable in production -- lost all HTTP-level route
+  coverage as a side effect (only `sim/tests/test_api_params_loader.py`
+  exercised the underlying exception directly, never through a real
+  route), caught in the final whole-branch review and restored by
+  `test_get_simulation_still_404s_for_an_owned_league_with_no_data_for_
+  that_season` in `sim/tests/test_api_app.py`.
+- **Explicitly out of scope, matching this phase's own spec.** Team-level
+  scoping within an owned league (any team's roster/schedule/etc. inside a
+  league the caller owns is still readable, matching the shared-league-view
+  product model) and sim-API rate limiting -- both deliberate deferrals,
+  not gaps found late.
+- **Live verification performed by the controller directly against a real
+  running instance, not just inferred from the test suite:** an
+  unauthenticated request to a protected `/league/{league_id}/*` route
+  returned 401; a valid token for a league other than the caller's
+  connected one returned 403; a live browser walkthrough covering a
+  non-team-scoped page, a team-scoped page, and a real trade comparison
+  through one of the newly-authenticated Route Handlers rendered real data
+  with zero console errors.
+- **Final whole-branch review fix wave** (after all 7 plan tasks were
+  implemented and individually reviewed) closed 2 Important test-coverage
+  gaps and 3 Minor findings:
+  - **Restored 404-for-uningested-season route coverage**, per the bullet
+    above.
+  - **`connect_as` (`sim/tests/conftest.py`) now asserts its own
+    `POST /leagues/connect` call succeeded** instead of discarding the
+    response. Previously, if that call ever started failing silently,
+    every `test_*_returns_403_for_a_league_the_caller_does_not_own` test
+    across the suite (ten of them) would have kept passing anyway -- an
+    *unconnected* user gets the same 403 from `require_league_owner` as a
+    wrongly-connected one, for the same reason, so the tests would have
+    stayed green while proving nothing.
+  - **Two stale docstrings corrected**: `require_user`'s no longer claims
+    it's "not yet attached to any league route," and now names Phase C's
+    `require_league_owner` as the dependent that puts it on all 12
+    `/league/{league_id}/*` routes; `post_analyst_chat`'s no longer claims
+    "this app has no auth/league-picker," a leftover from before Phase A.
+  - **Hoisted a function-local import to module level** in the 6 test
+    files where it was repeated per-test rather than imported once:
+    `from scripts.ingest_synthetic_league import build_synthetic_raw_payload`
+    (`sim/tests/conftest.py` already imported it at module level with no
+    circular-import issue, so there was no reason for the local form).
+- **Deferred to the deployment phase, not this one** -- 3 items the final
+  review surfaced as relevant only once `/sim` actually leaves
+  `127.0.0.1`, not bugs in this phase:
+  1. **No unauthenticated health-check endpoint.** Every `/league/*` route
+     now 401s, so a Railway healthcheck needs a real `GET /health` added
+     in the deploy phase, not pointed at a docs route.
+  2. **`/docs`, `/redoc`, and `/openapi.json` are enabled by default**
+     (`FastAPI(title=...)` passes no `docs_url=None`) and would publish
+     the full route table unauthenticated on a public host -- a decision
+     to make deliberately in the deploy phase, not a Phase C defect.
+  3. **There is deliberately no CORS middleware today.** Every sim call
+     originates server-side, enforced by `import "server-only"` in
+     `web/lib/api.ts`. The deploy phase should keep that posture: adding
+     CORS would imply browser-direct calls to the sim API, which would
+     mean shipping the bearer token to the client bundle and undoing this
+     phase's entire point.
+- **Verification**: `pytest sim/tests ingest/tests -q` all passing (320
+  tests, including the restored 404-for-uningested-season coverage and the
+  hardened `connect_as` fixture). `mypy --strict sim ingest` and
+  `ruff check sim ingest db scripts` show no new errors beyond the same
+  pre-existing baseline present before this phase (`sim/engine.py` and
+  `sim/tests/test_engine.py` missing `ndarray`/`dict` type arguments;
+  `scripts/regenerate_golden.py`'s unused `noqa` directives;
+  `sim/api/waiver_intelligence_view.py`'s `TRY004` finding) -- confirmed
+  identical on `main` before this fix wave via `git stash`. `npx tsc
+  --noEmit` and `npx eslint .` clean in `/web`.
