@@ -42,6 +42,7 @@ field means and why it isn't "analytics logic" in the CLAUDE.md sense.
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -1126,7 +1127,20 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             _scheduler = None
 
 
-app = FastAPI(title="fantavo sim API", lifespan=lifespan)
+# No existing convention distinguishes prod from dev on the Python side
+# (unlike the web layer's automatic NODE_ENV) -- ENVIRONMENT=production is
+# set explicitly on the deployed service. Unset locally, so /docs stays on
+# for local development. Gates the interactive API docs, which would
+# otherwise publish the full route table unauthenticated on a public host.
+_is_production = os.environ.get("ENVIRONMENT") == "production"
+
+app = FastAPI(
+    title="fantavo sim API",
+    lifespan=lifespan,
+    docs_url=None if _is_production else "/docs",
+    redoc_url=None if _is_production else "/redoc",
+    openapi_url=None if _is_production else "/openapi.json",
+)
 
 
 def get_dsn() -> str:
@@ -1204,6 +1218,18 @@ def require_league_owner(
     if state.league_id != league_id:
         raise HTTPException(status_code=403, detail="not authorized for this league")
     return user
+
+
+@app.get("/health")
+def health(conn: psycopg.Connection[Any] = Depends(get_connection)) -> dict[str, str]:  # noqa: B008 (idiomatic FastAPI)
+    """Unauthenticated on purpose -- a deploy healthcheck has no session to
+    present, and every other route requires one as of Phase C. Actually
+    exercises the DB connection (not just "the process is alive") so a
+    broken DATABASE_URL or an unreachable Postgres shows up as an unhealthy
+    deploy, not a silently-degraded one."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1")
+    return {"status": "ok"}
 
 
 @app.post("/auth/signup", response_model=AuthResponseOut, status_code=201)
