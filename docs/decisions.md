@@ -2623,8 +2623,16 @@ sub-feature; nothing needs undoing when that day comes.
   coverage as a side effect (only `sim/tests/test_api_params_loader.py`
   exercised the underlying exception directly, never through a real
   route), caught in the final whole-branch review and restored by
-  `test_get_simulation_still_404s_for_an_owned_league_with_no_data_for_
-  that_season` in `sim/tests/test_api_app.py`.
+  `test_whatif_still_404s_for_an_owned_league_with_no_data_for_that_season`
+  in `sim/tests/test_api_app.py`, which posts to `/league/{id}/whatif` with
+  an owned league and an explicit, never-ingested `season_id` -- the route
+  that actually reaches `load_league`/`load_raw_payload` and raises
+  `LeagueNotIngestedError` for that case. (The simulation `GET` route was
+  the fix wave's first attempt at this test, but an explicit `season_id`
+  short-circuits its `resolve_season_id` call before it ever touches the
+  DB, so it falls through to a different, unrelated 404 -- "no
+  precomputed simulation cached" -- rather than `LeagueNotIngestedError`;
+  caught and corrected in a second review pass.)
 - **Explicitly out of scope, matching this phase's own spec.** Team-level
   scoping within an owned league (any team's roster/schedule/etc. inside a
   league the caller owns is still readable, matching the shared-league-view

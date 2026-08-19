@@ -64,14 +64,23 @@ def test_get_simulation_returns_403_for_a_league_the_caller_does_not_own(
     assert response.status_code == 403
 
 
-def test_get_simulation_still_404s_for_an_owned_league_with_no_data_for_that_season(
+def test_whatif_still_404s_for_an_owned_league_with_no_data_for_that_season(
     connect_as: Callable[[dict[str, Any]], ConnectedClient], raw_fixture: dict[str, Any]
 ) -> None:
+    # Unlike the simulation GET (season_id passed explicitly short-circuits
+    # resolve_season_id before it ever touches the DB, so it can't reach
+    # LeagueNotIngestedError), /whatif always calls load_league ->
+    # load_raw_payload right after resolving the season, so this is the
+    # route that actually exercises the LeagueNotIngestedError -> 404 path
+    # for an owned league with a never-ingested season.
     cc = connect_as(raw_fixture)
-    response = cc.client.get(
-        f"/league/{cc.league_id}/simulation", params={"season_id": 1999}, headers=cc.headers
+    response = cc.client.post(
+        f"/league/{cc.league_id}/whatif",
+        json={"season_id": 1999, "n_sims": 50},
+        headers=cc.headers,
     )
     assert response.status_code == 404
+    assert "ingest it first" in response.json()["detail"]
 
 
 def test_get_simulation_requires_auth(client: TestClient) -> None:
