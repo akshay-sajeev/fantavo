@@ -2454,16 +2454,19 @@ sub-feature; nothing needs undoing when that day comes.
   and routes a signed-in user to whichever step of connect/pick-team/real-
   league applies. `DEFAULT_LEAGUE_ID` and the redirect it drove are gone.
   A recurring re-ingest job on the existing `sim/api/scheduler.py`
-  `BackgroundScheduler` re-fetches every connected user's league on the same
-  6-hour `PRECOMPUTE_INTERVAL_HOURS` cadence, with per-user error isolation
-  so one user's expired cookies or a transient ESPN error never aborts the
-  batch.
+  `BackgroundScheduler` re-fetches every connected user's league on its own
+  `REINGEST_INTERVAL_HOURS`, deliberately set to the same 6-hour cadence as
+  `PRECOMPUTE_INTERVAL_HOURS`, with per-user error isolation so one user's
+  expired cookies or a transient ESPN error never aborts the batch.
 - **Credentials are encrypted at rest with Fernet, never stored or logged in
   plaintext.** A new `CREDENTIAL_ENCRYPTION_KEY`, read via `sim/api/env.py`'s
   existing `.env` loader alongside `GEMINI_API_KEY`, never touches the
-  database and is never logged. `espn_s2`/`SWID` are encrypted before the
-  `UPDATE app_user` in `connect_league` and decrypted only inside the
-  request handler and the recurring re-ingest job -- the same secrets
+  database and is never logged. `espn_s2`/`SWID` submitted on
+  `POST /leagues/connect` are encrypted before the `UPDATE app_user` in
+  `connect_league`; `decrypt_credential` (`sim/api/crypto.py`) is called from
+  exactly one production site, `sim/api/reingest.py`'s recurring re-ingest
+  job -- no HTTP request handler ever decrypts stored credentials
+  (`GET /leagues/me` doesn't touch the cookie columns at all). Same secrets
   discipline CLAUDE.md already required for these cookies, now backed by
   actual encryption instead of just careful logging, since this is the first
   phase where they're a real user's live credentials at rest in production
