@@ -154,21 +154,37 @@ async function authedFetch(
   return res;
 }
 
-export function getSimulation(
+export async function getSimulation(
+  token: string,
   leagueId: number,
   seasonId?: number,
 ): Promise<SimulationResponse> {
-  return getJson<SimulationResponse>(`/league/${leagueId}/simulation`, {
-    season_id: seasonId,
-  });
+  const url = new URL(`/league/${leagueId}/simulation`, API_BASE);
+  if (seasonId !== undefined) url.searchParams.set("season_id", String(seasonId));
+  const res = await authedFetch(url.pathname + url.search, token, "GET");
+  return (await res.json()) as SimulationResponse;
 }
 
-export function getRoster(leagueId: number, seasonId?: number): Promise<RosterResponse> {
-  return getJson<RosterResponse>(`/league/${leagueId}/roster`, { season_id: seasonId });
+export async function getRoster(
+  token: string,
+  leagueId: number,
+  seasonId?: number,
+): Promise<RosterResponse> {
+  const url = new URL(`/league/${leagueId}/roster`, API_BASE);
+  if (seasonId !== undefined) url.searchParams.set("season_id", String(seasonId));
+  const res = await authedFetch(url.pathname + url.search, token, "GET");
+  return (await res.json()) as RosterResponse;
 }
 
-export function getSchedule(leagueId: number, seasonId?: number): Promise<ScheduleResponse> {
-  return getJson<ScheduleResponse>(`/league/${leagueId}/schedule`, { season_id: seasonId });
+export async function getSchedule(
+  token: string,
+  leagueId: number,
+  seasonId?: number,
+): Promise<ScheduleResponse> {
+  const url = new URL(`/league/${leagueId}/schedule`, API_BASE);
+  if (seasonId !== undefined) url.searchParams.set("season_id", String(seasonId));
+  const res = await authedFetch(url.pathname + url.search, token, "GET");
+  return (await res.json()) as ScheduleResponse;
 }
 
 /**
@@ -179,42 +195,53 @@ export function getSchedule(leagueId: number, seasonId?: number): Promise<Schedu
  * results are directly comparable (common random numbers) -- never called
  * directly from a client component, per this file's server-only contract.
  */
-export function postWhatif(leagueId: number, body: WhatIfRequestBody): Promise<SimulationResponse> {
-  return postJson<SimulationResponse>(`/league/${leagueId}/whatif`, body);
+export async function postWhatif(
+  token: string,
+  leagueId: number,
+  body: WhatIfRequestBody,
+): Promise<SimulationResponse> {
+  const res = await authedFetch(`/league/${leagueId}/whatif`, token, "POST", body);
+  return (await res.json()) as SimulationResponse;
 }
 
 /** POST /league/{id}/whatif/season-replay -- see sim.api.season_replay_view
  * and sim.api.app.SeasonReplayResponse for what this data means (one
  * sampled SYNTHETIC "actual" season, never real results). */
-export function postSeasonReplay(
+export async function postSeasonReplay(
+  token: string,
   leagueId: number,
   body: { season_id?: number; seed?: number },
 ): Promise<SeasonReplayResponse> {
-  return postJson<SeasonReplayResponse>(`/league/${leagueId}/whatif/season-replay`, body);
+  const res = await authedFetch(`/league/${leagueId}/whatif/season-replay`, token, "POST", body);
+  return (await res.json()) as SeasonReplayResponse;
 }
 
 /** GET /league/{id}/draft-autopsy -- see sim.api.draft_autopsy_view for the
  * full grading methodology. 409s for a league with no completed draft to
  * grade (a pre-draft league, or the SYNTHETIC validation league). */
-export function getDraftAutopsy(
+export async function getDraftAutopsy(
+  token: string,
   leagueId: number,
   seasonId?: number,
 ): Promise<DraftAutopsyResponse> {
-  return getJson<DraftAutopsyResponse>(`/league/${leagueId}/draft-autopsy`, {
-    season_id: seasonId,
-  });
+  const url = new URL(`/league/${leagueId}/draft-autopsy`, API_BASE);
+  if (seasonId !== undefined) url.searchParams.set("season_id", String(seasonId));
+  const res = await authedFetch(url.pathname + url.search, token, "GET");
+  return (await res.json()) as DraftAutopsyResponse;
 }
 
 /** GET /league/{id}/playoff-planner -- see sim.api.playoff_planner_view for
  * the full methodology (projected bracket, seeding odds, per-roster-slot
  * playoff-window strength, and the bench-depth-driven weakness signal). */
-export function getPlayoffPlanner(
+export async function getPlayoffPlanner(
+  token: string,
   leagueId: number,
   seasonId?: number,
 ): Promise<PlayoffPlannerResponse> {
-  return getJson<PlayoffPlannerResponse>(`/league/${leagueId}/playoff-planner`, {
-    season_id: seasonId,
-  });
+  const url = new URL(`/league/${leagueId}/playoff-planner`, API_BASE);
+  if (seasonId !== undefined) url.searchParams.set("season_id", String(seasonId));
+  const res = await authedFetch(url.pathname + url.search, token, "GET");
+  return (await res.json()) as PlayoffPlannerResponse;
 }
 
 /** GET /league/{id}/lineup-optimizer/{team_id} -- see
@@ -223,14 +250,16 @@ export function getPlayoffPlanner(
  * individual player floors), why "highest upside" means season title
  * probability (never mean points), and exactly what search space
  * ("every single-slot swap") makes re-simulating that tractable. */
-export function getLineupOptimizer(
+export async function getLineupOptimizer(
+  token: string,
   leagueId: number,
   teamId: number,
   seasonId?: number,
 ): Promise<LineupOptimizerResponse> {
-  return getJson<LineupOptimizerResponse>(`/league/${leagueId}/lineup-optimizer/${teamId}`, {
-    season_id: seasonId,
-  });
+  const url = new URL(`/league/${leagueId}/lineup-optimizer/${teamId}`, API_BASE);
+  if (seasonId !== undefined) url.searchParams.set("season_id", String(seasonId));
+  const res = await authedFetch(url.pathname + url.search, token, "GET");
+  return (await res.json()) as LineupOptimizerResponse;
 }
 
 /** GET /league/{id}/waiver-intelligence/{team_id} -- see
@@ -238,15 +267,16 @@ export function getLineupOptimizer(
  * scoring signals (opportunity, availability, league fit, competition), why
  * the response is grouped by position rather than one flat cross-position
  * list, and why this route calls no simulation at all. */
-export function getWaiverIntelligence(
+export async function getWaiverIntelligence(
+  token: string,
   leagueId: number,
   teamId: number,
   seasonId?: number,
 ): Promise<WaiverIntelligenceResponse> {
-  return getJson<WaiverIntelligenceResponse>(
-    `/league/${leagueId}/waiver-intelligence/${teamId}`,
-    { season_id: seasonId },
-  );
+  const url = new URL(`/league/${leagueId}/waiver-intelligence/${teamId}`, API_BASE);
+  if (seasonId !== undefined) url.searchParams.set("season_id", String(seasonId));
+  const res = await authedFetch(url.pathname + url.search, token, "GET");
+  return (await res.json()) as WaiverIntelligenceResponse;
 }
 
 /** GET /league/{id}/beat-my-league/{team_id} -- see
@@ -255,14 +285,16 @@ export function getWaiverIntelligence(
  * (all reused from Playoff Planner's own already-computed output, never
  * recomputed), plus one selected team's biggest threat, real advantage, and
  * which positions not to trade away. */
-export function getBeatMyLeague(
+export async function getBeatMyLeague(
+  token: string,
   leagueId: number,
   teamId: number,
   seasonId?: number,
 ): Promise<BeatMyLeagueResponse> {
-  return getJson<BeatMyLeagueResponse>(`/league/${leagueId}/beat-my-league/${teamId}`, {
-    season_id: seasonId,
-  });
+  const url = new URL(`/league/${leagueId}/beat-my-league/${teamId}`, API_BASE);
+  if (seasonId !== undefined) url.searchParams.set("season_id", String(seasonId));
+  const res = await authedFetch(url.pathname + url.search, token, "GET");
+  return (await res.json()) as BeatMyLeagueResponse;
 }
 
 /** GET /league/{id}/power-ranking-roast -- see sim.api.roast_view for the
@@ -272,13 +304,15 @@ export function getBeatMyLeague(
  * invented joke. `has_draft_data` is false for a league with no completed
  * draft to grade -- every roast still renders, just without a draft-derived
  * sentence. */
-export function getPowerRankingRoast(
+export async function getPowerRankingRoast(
+  token: string,
   leagueId: number,
   seasonId?: number,
 ): Promise<PowerRankingRoastResponse> {
-  return getJson<PowerRankingRoastResponse>(`/league/${leagueId}/power-ranking-roast`, {
-    season_id: seasonId,
-  });
+  const url = new URL(`/league/${leagueId}/power-ranking-roast`, API_BASE);
+  if (seasonId !== undefined) url.searchParams.set("season_id", String(seasonId));
+  const res = await authedFetch(url.pathname + url.search, token, "GET");
+  return (await res.json()) as PowerRankingRoastResponse;
 }
 
 /** POST /league/{id}/analyst/{team_id} -- the AI league analyst's real
@@ -288,12 +322,14 @@ export function getPowerRankingRoast(
  * number in the response's `reply` traces back to a real `tool_calls[i]`
  * result; `citations`/`spans` let the frontend render cited numbers as
  * real components without computing anything itself. */
-export function postAnalystChat(
+export async function postAnalystChat(
+  token: string,
   leagueId: number,
   teamId: number,
   body: { season_id?: number; messages: AnalystMessage[] },
 ): Promise<AnalystChatResponse> {
-  return postJson<AnalystChatResponse>(`/league/${leagueId}/analyst/${teamId}`, body);
+  const res = await authedFetch(`/league/${leagueId}/analyst/${teamId}`, token, "POST", body);
+  return (await res.json()) as AnalystChatResponse;
 }
 
 export function postAuthSignup(email: string, password: string): Promise<AuthResponse> {

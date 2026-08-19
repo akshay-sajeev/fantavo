@@ -27,3 +27,14 @@ export const getCurrentUser = cache(async (): Promise<AuthUser | null> => {
     return null;
   }
 });
+
+/**
+ * The raw session token, for callers that need to forward it as a bearer
+ * token to an authenticated sim API route (Phase C) rather than just
+ * knowing who's signed in. getCurrentUser() deliberately doesn't expose
+ * this -- most callers only need the resolved user, not the credential.
+ */
+export async function getSessionToken(): Promise<string | null> {
+  const cookieStore = await cookies();
+  return cookieStore.get(SESSION_COOKIE_NAME)?.value ?? null;
+}
