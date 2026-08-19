@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import copy
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from typing import Any
 
@@ -23,6 +23,7 @@ from ingest.db import DEFAULT_TEST_DSN, ingest_league
 from ingest.errors import MissingProjectionError
 from sim.api import app as app_module
 from sim.api.roster_view import _BENCH_DEPTH_RELEVANT_POSITIONS, load_team_rosters
+from sim.tests.conftest import ConnectedClient
 
 TEST_DSN = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DSN)
 
@@ -37,9 +38,17 @@ def client(
         yield test_client
 
 
-def test_get_roster_returns_404_for_an_uningested_league(client: TestClient) -> None:
+def test_get_roster_returns_403_for_a_league_the_caller_does_not_own(
+    connect_as: Callable[[dict[str, Any]], ConnectedClient], raw_fixture: dict[str, Any]
+) -> None:
+    cc = connect_as(raw_fixture)
+    response = cc.client.get("/league/424242/roster", headers=cc.headers)
+    assert response.status_code == 403
+
+
+def test_get_roster_requires_auth(client: TestClient) -> None:
     response = client.get("/league/424242/roster")
-    assert response.status_code == 404
+    assert response.status_code == 401
 
 
 def test_load_team_rosters_floor_is_below_mean_and_ceiling_above(
@@ -67,11 +76,19 @@ def test_get_roster_matches_a_direct_load_team_rosters_call(
     pg_conn: psycopg.Connection[Any],
     synthetic_league_id: int,
     raw_fixture: dict[str, Any],
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
+    from scripts.ingest_synthetic_league import build_synthetic_raw_payload
+
     season_id = raw_fixture["seasonId"]
     direct = load_team_rosters(pg_conn, synthetic_league_id, season_id)
 
-    response = client.get(f"/league/{synthetic_league_id}/roster", params={"season_id": season_id})
+    cc = connect_as(build_synthetic_raw_payload(raw_fixture))
+    response = cc.client.get(
+        f"/league/{synthetic_league_id}/roster",
+        params={"season_id": season_id},
+        headers=cc.headers,
+    )
     assert response.status_code == 200
     body = response.json()
     assert len(body["teams"]) == len(direct) == 10

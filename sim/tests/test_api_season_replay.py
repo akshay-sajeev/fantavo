@@ -12,7 +12,7 @@ numbers" rules require.
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import numpy as np
@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 from ingest.db import DEFAULT_TEST_DSN
 from sim.api import app as app_module
 from sim.api.season_replay_view import compute_season_replay
+from sim.tests.conftest import ConnectedClient
 
 TEST_DSN = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DSN)
 
@@ -37,9 +38,19 @@ def client(
         yield test_client
 
 
-def test_get_season_replay_returns_404_for_an_uningested_league(client: TestClient) -> None:
+def test_get_season_replay_returns_403_for_a_league_the_caller_does_not_own(
+    connect_as: Callable[[dict[str, Any]], ConnectedClient], raw_fixture: dict[str, Any]
+) -> None:
+    cc = connect_as(raw_fixture)
+    response = cc.client.post(
+        "/league/424242/whatif/season-replay", json={}, headers=cc.headers
+    )
+    assert response.status_code == 403
+
+
+def test_get_season_replay_requires_auth(client: TestClient) -> None:
     response = client.post("/league/424242/whatif/season-replay", json={})
-    assert response.status_code == 404
+    assert response.status_code == 401
 
 
 def test_optimal_lineup_never_scores_less_than_the_actual_lineup(
@@ -107,16 +118,21 @@ def test_post_season_replay_matches_a_direct_call_with_the_same_seed(
     pg_conn: psycopg.Connection[Any],
     synthetic_league_id: int,
     raw_fixture: dict[str, Any],
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
+    from scripts.ingest_synthetic_league import build_synthetic_raw_payload
+
     season_id = raw_fixture["seasonId"]
     seed = 555
     direct = compute_season_replay(
         pg_conn, synthetic_league_id, season_id, rng=np.random.default_rng(seed)
     )
 
-    response = client.post(
+    cc = connect_as(build_synthetic_raw_payload(raw_fixture))
+    response = cc.client.post(
         f"/league/{synthetic_league_id}/whatif/season-replay",
         json={"season_id": season_id, "seed": seed},
+        headers=cc.headers,
     )
     assert response.status_code == 200
     body = response.json()

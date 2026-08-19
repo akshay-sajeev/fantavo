@@ -1398,6 +1398,7 @@ def get_roster(
     league_id: int,
     season_id: int | None = None,
     conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+    _owner: auth_view.AuthedUser = Depends(require_league_owner),  # noqa: B008 (idiomatic FastAPI)
 ) -> RosterResponse:
     try:
         resolved_season_id = resolve_season_id(conn, league_id, season_id)
@@ -1419,6 +1420,7 @@ def get_schedule(
     league_id: int,
     season_id: int | None = None,
     conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+    _owner: auth_view.AuthedUser = Depends(require_league_owner),  # noqa: B008 (idiomatic FastAPI)
 ) -> ScheduleResponse:
     try:
         resolved_season_id = resolve_season_id(conn, league_id, season_id)
@@ -1440,6 +1442,7 @@ def post_season_replay(
     league_id: int,
     req: SeasonReplayRequest,
     conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+    _owner: auth_view.AuthedUser = Depends(require_league_owner),  # noqa: B008 (idiomatic FastAPI)
 ) -> SeasonReplayResponse:
     """Alternate-lineup and schedule-neutrality what-ifs -- see
     sim.api.season_replay_view's module docstring for what "actual" means

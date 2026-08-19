@@ -9,7 +9,7 @@ schedule with every matchup decided reports no current week at all.
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import psycopg
@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from ingest.db import DEFAULT_TEST_DSN
 from sim.api import app as app_module
 from sim.api.schedule_view import load_schedule
+from sim.tests.conftest import ConnectedClient
 
 TEST_DSN = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DSN)
 
@@ -33,9 +34,17 @@ def client(
         yield test_client
 
 
-def test_get_schedule_returns_404_for_an_uningested_league(client: TestClient) -> None:
+def test_get_schedule_returns_403_for_a_league_the_caller_does_not_own(
+    connect_as: Callable[[dict[str, Any]], ConnectedClient], raw_fixture: dict[str, Any]
+) -> None:
+    cc = connect_as(raw_fixture)
+    response = cc.client.get("/league/424242/schedule", headers=cc.headers)
+    assert response.status_code == 403
+
+
+def test_get_schedule_requires_auth(client: TestClient) -> None:
     response = client.get("/league/424242/schedule")
-    assert response.status_code == 404
+    assert response.status_code == 401
 
 
 def test_load_schedule_reports_week_1_as_current_for_an_all_undecided_league(
@@ -74,12 +83,18 @@ def test_get_schedule_route_matches_a_direct_load_schedule_call(
     pg_conn: psycopg.Connection[Any],
     synthetic_league_id: int,
     raw_fixture: dict[str, Any],
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
+    from scripts.ingest_synthetic_league import build_synthetic_raw_payload
+
     season_id = raw_fixture["seasonId"]
     direct = load_schedule(pg_conn, synthetic_league_id, season_id)
 
-    response = client.get(
-        f"/league/{synthetic_league_id}/schedule", params={"season_id": season_id}
+    cc = connect_as(build_synthetic_raw_payload(raw_fixture))
+    response = cc.client.get(
+        f"/league/{synthetic_league_id}/schedule",
+        params={"season_id": season_id},
+        headers=cc.headers,
     )
     assert response.status_code == 200
     body = response.json()
