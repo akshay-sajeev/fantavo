@@ -45,7 +45,7 @@ import logging
 import os
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -55,6 +55,7 @@ from pydantic import BaseModel, Field
 
 from ingest.db import DEFAULT_DEV_DSN, connect, dsn_from_env
 from ingest.errors import IngestError
+from ingest.espn_client import EspnFetchError
 from sim.api import auth_view, league_connection_view
 from sim.api.analyst_tools import UnknownAnalystTeamError
 from sim.api.analyst_view import (
@@ -99,8 +100,8 @@ from sim.api.playoff_planner_view import (
     TeamPlayoffPlan,
     compute_playoff_planner,
 )
-from sim.api.precompute import precompute_all_leagues
-from sim.api.reingest import reingest_all_connected_users
+from sim.api.precompute import precompute_all_leagues, precompute_league
+from sim.api.reingest import reingest_all_connected_users, reingest_user
 from sim.api.roast_view import (
     PowerRankingRoastResult,
     RoastFact,
@@ -1114,6 +1115,22 @@ class LeagueConnectionOut(BaseModel):
     teams: list[TeamOptionOut]
 
 
+class RefreshLeagueResponse(BaseModel):
+    status: str
+    ingested_at: datetime | None
+    odds_updated: bool
+
+
+# 5 minutes: long enough that spamming the button can't meaningfully
+# stress ESPN's own (undocumented) rate limits, short enough the button
+# never feels broken. Keyed on the league, not the user -- this app's
+# shared-league-view model means a second connected user's refresh within
+# this window would just repeat the same work, not serve a genuinely
+# different need. See docs/superpowers/specs/2026-08-19-manual-league-
+# refresh-design.md.
+REFRESH_COOLDOWN = timedelta(minutes=5)
+
+
 _scheduler: Any = None
 
 
@@ -1392,6 +1409,57 @@ def get_leagues_me(
         connected_at=state.connected_at,
         teams=teams,
     )
+
+
+@app.post("/league/{league_id}/refresh", response_model=RefreshLeagueResponse)
+def refresh_league(
+    league_id: int,
+    _owner: auth_view.AuthedUser = Depends(require_league_owner),  # noqa: B008 (idiomatic FastAPI)
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> RefreshLeagueResponse:
+    """Manual, on-demand counterpart to the daily Cron-triggered
+    /internal/reingest + /internal/precompute pair (see docs/decisions.md's
+    Vercel Serverless Migration entry) -- re-ingests and recomputes odds
+    for exactly the caller's one connected league, not the full batch."""
+    now = datetime.now(UTC)
+    season_id = league_connection_view.resolve_current_season_id(now)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT ingested_at FROM league WHERE league_id = %s AND season_id = %s",
+            (league_id, season_id),
+        )
+        row = cur.fetchone()
+    if row is not None:
+        elapsed = now - row[0]
+        if elapsed < REFRESH_COOLDOWN:
+            retry_after = REFRESH_COOLDOWN - elapsed
+            raise HTTPException(
+                status_code=429,
+                detail="refreshed too recently, try again shortly",
+                headers={"Retry-After": str(max(1, int(retry_after.total_seconds())))},
+            )
+
+    try:
+        reingest_user(conn, _owner.user_id, now)
+    except CredentialEncryptionError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except EspnFetchError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except IngestError:
+        # e.g. RosterNotAvailableError -- a new NFL season that hasn't
+        # drafted yet is a legitimate state, not a failure. Nothing
+        # changed, so nothing to precompute either.
+        return RefreshLeagueResponse(status="ok", ingested_at=None, odds_updated=False)
+
+    try:
+        precompute_league(conn, league_id, season_id, now)
+    except IngestError:
+        # e.g. if the league hasn't drafted yet, precompute_league can't succeed.
+        # Treat this the same as if reingest_user had raised IngestError.
+        return RefreshLeagueResponse(status="ok", ingested_at=None, odds_updated=False)
+
+    return RefreshLeagueResponse(status="ok", ingested_at=now, odds_updated=True)
 
 
 @app.get("/league/{league_id}/simulation", response_model=SimulationResponse)
