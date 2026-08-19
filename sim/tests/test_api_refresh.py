@@ -234,3 +234,59 @@ def test_refresh_returns_ok_with_odds_not_updated_when_precompute_fails(
     assert row is not None
     (new_ingested_at,) = row
     assert new_ingested_at > old
+
+
+def test_refresh_returns_ok_with_odds_not_updated_when_reingest_fails(
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
+    raw_fixture: dict[str, Any],
+    pg_conn: psycopg.Connection[Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercises the first IngestError handler: reingest_user raises IngestError,
+    so nothing is ingested and league.ingested_at remains unchanged. The response
+    has status="ok" (the route succeeded), odds_updated=False (no computation
+    attempted), and ingested_at=None (no data was updated).
+
+    This contrasts with test_refresh_returns_ok_with_odds_not_updated_when_precompute_fails,
+    which has reingest_user succeed but precompute_league fail. Here, reingest_user
+    itself fails, so the database is not modified."""
+    monkeypatch.setattr(reingest, "fetch_live_league", lambda *a, **k: raw_fixture)
+    cc = connect_as(raw_fixture)
+
+    old = datetime.now(timezone.utc) - timedelta(minutes=10)
+    pg_conn.execute(
+        "UPDATE league SET ingested_at = %s WHERE league_id = %s AND season_id = %s",
+        (old, raw_fixture["id"], raw_fixture["seasonId"]),
+    )
+    pg_conn.commit()
+
+    # Monkeypatch reingest_user (as imported into app.py's namespace) to raise
+    # IngestError, simulating a scenario where reingest cannot proceed
+    # (e.g. credential decryption error that wasn't caught earlier, or
+    # an ESPN payload that can't be parsed as a league).
+    from ingest.errors import IngestError
+
+    def _reingest_fails(*args: Any, **kwargs: Any) -> Any:
+        raise IngestError("simulated reingest failure")
+
+    monkeypatch.setattr(app_module, "reingest_user", _reingest_fails)
+
+    response = cc.client.post(f"/league/{cc.league_id}/refresh", headers=cc.headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["odds_updated"] is False
+    assert body["ingested_at"] is None
+
+    # Verify that reingest_user never executed — league.ingested_at in the database
+    # is still the old value (unchanged). This is the key difference from the other
+    # two IngestError tests, which have reingest_user actually run and update the database.
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT ingested_at FROM league WHERE league_id = %s AND season_id = %s",
+            (raw_fixture["id"], raw_fixture["seasonId"]),
+        )
+        row = cur.fetchone()
+    assert row is not None
+    (db_ingested_at,) = row
+    assert db_ingested_at == old
