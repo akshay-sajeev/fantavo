@@ -7,13 +7,18 @@ exercise the real ingest_league() path end-to-end without a network call.
 
 from __future__ import annotations
 
+import os
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from typing import Any
 
 import psycopg
 import pytest
+from fastapi.testclient import TestClient
 
+from ingest.db import DEFAULT_TEST_DSN
 from ingest.espn_client import EspnAuthenticationError
+from sim.api import app as app_module
 from sim.api import auth_view, league_connection_view
 from sim.api.league_connection_view import (
     LeagueConnectionError,
@@ -27,6 +32,17 @@ from sim.api.league_connection_view import (
 )
 
 FIXED_NOW = datetime(2026, 6, 1, tzinfo=timezone.utc)
+TEST_DSN = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DSN)
+
+
+@pytest.fixture()
+def client(
+    pg_conn: psycopg.Connection[Any], monkeypatch: pytest.MonkeyPatch
+) -> Iterator[TestClient]:
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
+    monkeypatch.setattr(app_module, "start_scheduler", lambda dsn=None: None)
+    with TestClient(app_module.app) as test_client:
+        yield test_client
 
 
 def _make_user(pg_conn: psycopg.Connection[Any]) -> int:
@@ -143,3 +159,82 @@ def test_list_teams_for_league_reads_from_the_team_table(
 
     teams = list_teams_for_league(pg_conn, raw_fixture["id"], 2026)
     assert {t.team_id for t in teams} == {t["id"] for t in raw_fixture["teams"]}
+
+
+def test_connect_then_pick_team_over_http(
+    client: TestClient, raw_fixture: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(league_connection_view, "fetch_live_league", lambda *a, **k: raw_fixture)
+
+    signup_res = client.post(
+        "/auth/signup", json={"email": "leaguehttp@example.com", "password": "a-real-password"}
+    )
+    headers = {"Authorization": f"Bearer {signup_res.json()['token']}"}
+
+    me_before = client.get("/leagues/me", headers=headers)
+    assert me_before.status_code == 200
+    assert me_before.json()["league_id"] is None
+    assert me_before.json()["teams"] == []
+
+    connect_res = client.post(
+        "/leagues/connect", json={"league_id": raw_fixture["id"]}, headers=headers
+    )
+    assert connect_res.status_code == 200
+    teams = connect_res.json()["teams"]
+    assert len(teams) == len(raw_fixture["teams"])
+
+    me_after_connect = client.get("/leagues/me", headers=headers)
+    assert me_after_connect.json()["league_id"] == raw_fixture["id"]
+    assert me_after_connect.json()["team_id"] is None
+    assert len(me_after_connect.json()["teams"]) == len(raw_fixture["teams"])
+
+    team_res = client.post(
+        "/leagues/team", json={"team_id": teams[0]["team_id"]}, headers=headers
+    )
+    assert team_res.status_code == 204
+
+    me_final = client.get("/leagues/me", headers=headers)
+    assert me_final.json()["team_id"] == teams[0]["team_id"]
+    assert me_final.json()["teams"] == []
+
+
+def test_leagues_connect_requires_auth(client: TestClient) -> None:
+    res = client.post("/leagues/connect", json={"league_id": 12345})
+    assert res.status_code == 401
+
+
+def test_leagues_me_requires_auth(client: TestClient) -> None:
+    assert client.get("/leagues/me").status_code == 401
+
+
+def test_leagues_connect_returns_400_with_a_specific_message_on_espn_failure(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _raise(*args: Any, **kwargs: Any) -> Any:
+        raise EspnAuthenticationError("bad cookies")
+
+    monkeypatch.setattr(league_connection_view, "fetch_live_league", _raise)
+
+    signup_res = client.post(
+        "/auth/signup", json={"email": "leaguefail@example.com", "password": "a-real-password"}
+    )
+    headers = {"Authorization": f"Bearer {signup_res.json()['token']}"}
+
+    res = client.post("/leagues/connect", json={"league_id": 12345}, headers=headers)
+    assert res.status_code == 400
+    assert "espn_s2" not in res.json()["detail"]  # never echoes the submitted credential
+
+
+def test_leagues_team_rejects_a_fake_team_over_http(
+    client: TestClient, raw_fixture: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(league_connection_view, "fetch_live_league", lambda *a, **k: raw_fixture)
+
+    signup_res = client.post(
+        "/auth/signup", json={"email": "leaguefaketeam@example.com", "password": "a-real-password"}
+    )
+    headers = {"Authorization": f"Bearer {signup_res.json()['token']}"}
+    client.post("/leagues/connect", json={"league_id": raw_fixture["id"]}, headers=headers)
+
+    res = client.post("/leagues/team", json={"team_id": 999999}, headers=headers)
+    assert res.status_code == 400

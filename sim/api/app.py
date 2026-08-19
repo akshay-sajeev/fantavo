@@ -54,7 +54,7 @@ from pydantic import BaseModel, Field
 
 from ingest.db import DEFAULT_DEV_DSN, connect, dsn_from_env
 from ingest.errors import IngestError
-from sim.api import auth_view
+from sim.api import auth_view, league_connection_view
 from sim.api.analyst_tools import UnknownAnalystTeamError
 from sim.api.analyst_view import (
     AnalystConfigError,
@@ -1083,6 +1083,33 @@ class MeResponseOut(BaseModel):
     email: str
 
 
+class ConnectLeagueRequest(BaseModel):
+    league_id: int
+    espn_s2: str | None = None
+    swid: str | None = None
+
+
+class TeamOptionOut(BaseModel):
+    team_id: int
+    name: str
+
+
+class ConnectLeagueResponseOut(BaseModel):
+    teams: list[TeamOptionOut]
+
+
+class SetTeamRequest(BaseModel):
+    team_id: int
+
+
+class LeagueConnectionOut(BaseModel):
+    league_id: int | None
+    season_id: int | None
+    team_id: int | None
+    connected_at: datetime | None
+    teams: list[TeamOptionOut]
+
+
 _scheduler: Any = None
 
 
@@ -1204,6 +1231,62 @@ def logout(
 @app.get("/auth/me", response_model=MeResponseOut)
 def me(user: auth_view.AuthedUser = Depends(require_user)) -> MeResponseOut:  # noqa: B008 (idiomatic FastAPI)
     return MeResponseOut(user_id=user.user_id, email=user.email)
+
+
+@app.post("/leagues/connect", response_model=ConnectLeagueResponseOut)
+def connect_league_route(
+    body: ConnectLeagueRequest,
+    user: auth_view.AuthedUser = Depends(require_user),  # noqa: B008 (idiomatic FastAPI)
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> ConnectLeagueResponseOut:
+    now = datetime.now(UTC)
+    try:
+        teams = league_connection_view.connect_league(
+            conn, user.user_id, body.league_id, body.espn_s2, body.swid, now
+        )
+    except league_connection_view.LeagueConnectionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ConnectLeagueResponseOut(
+        teams=[TeamOptionOut(team_id=t.team_id, name=t.name) for t in teams]
+    )
+
+
+@app.post("/leagues/team", status_code=204)
+def set_team_route(
+    body: SetTeamRequest,
+    user: auth_view.AuthedUser = Depends(require_user),  # noqa: B008 (idiomatic FastAPI)
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> None:
+    try:
+        league_connection_view.set_team(conn, user.user_id, body.team_id)
+    except (
+        league_connection_view.UnknownTeamError,
+        league_connection_view.NoConnectedLeagueError,
+    ) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/leagues/me", response_model=LeagueConnectionOut)
+def get_leagues_me(
+    user: auth_view.AuthedUser = Depends(require_user),  # noqa: B008 (idiomatic FastAPI)
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> LeagueConnectionOut:
+    state = league_connection_view.get_connection_state(conn, user.user_id)
+    teams: list[TeamOptionOut] = []
+    if state.league_id is not None and state.season_id is not None and state.team_id is None:
+        teams = [
+            TeamOptionOut(team_id=t.team_id, name=t.name)
+            for t in league_connection_view.list_teams_for_league(
+                conn, state.league_id, state.season_id
+            )
+        ]
+    return LeagueConnectionOut(
+        league_id=state.league_id,
+        season_id=state.season_id,
+        team_id=state.team_id,
+        connected_at=state.connected_at,
+        teams=teams,
+    )
 
 
 @app.get("/league/{league_id}/simulation", response_model=SimulationResponse)
