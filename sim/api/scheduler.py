@@ -20,6 +20,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from ingest.db import DEFAULT_DEV_DSN, connect, dsn_from_env
 from sim.api.precompute import precompute_all_leagues
+from sim.api.reingest import reingest_all_connected_users
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +32,23 @@ PRECOMPUTE_INTERVAL_HOURS = 6
 
 JOB_ID = "precompute_all_leagues"
 
+# Same cadence as precompute -- no reason to invent a different one
+# (Auth Phase B design doc). A user's connected league gets re-fetched from
+# live ESPN this often, keeping scores/standings current through the
+# season.
+REINGEST_INTERVAL_HOURS = 6
+
+REINGEST_JOB_ID = "reingest_all_connected_users"
+
 
 def _run_precompute_job(dsn: str) -> None:
     with connect(dsn) as conn:
         precompute_all_leagues(conn)
+
+
+def _run_reingest_job(dsn: str) -> None:
+    with connect(dsn) as conn:
+        reingest_all_connected_users(conn)
 
 
 def start_scheduler(dsn: str | None = None) -> BackgroundScheduler:
@@ -53,8 +67,19 @@ def start_scheduler(dsn: str | None = None) -> BackgroundScheduler:
         id=JOB_ID,
         replace_existing=True,
     )
+    scheduler.add_job(
+        _run_reingest_job,
+        "interval",
+        hours=REINGEST_INTERVAL_HOURS,
+        args=[resolved_dsn],
+        id=REINGEST_JOB_ID,
+        replace_existing=True,
+    )
     scheduler.start()
     logger.info(
         "started precompute scheduler: every %sh, dsn=%s", PRECOMPUTE_INTERVAL_HOURS, resolved_dsn
+    )
+    logger.info(
+        "started reingest scheduler: every %sh, dsn=%s", REINGEST_INTERVAL_HOURS, resolved_dsn
     )
     return scheduler
