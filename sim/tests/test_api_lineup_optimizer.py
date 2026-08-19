@@ -10,7 +10,7 @@ thin-integration-test split `sim.api.draft_autopsy_view` /
 from __future__ import annotations
 
 import copy
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from typing import Any
 
@@ -34,7 +34,7 @@ from sim.api.lineup_optimizer_view import (
 )
 from sim.params.derive import derive_player_params_pool
 from sim.params.variance import fit_position_cv
-from sim.tests.conftest import TEST_DSN
+from sim.tests.conftest import TEST_DSN, ConnectedClient
 
 # Small enough to keep unit tests fast (19 candidates x this many sims each,
 # twice -- weekly AND season); large enough that floor/title-probability
@@ -284,13 +284,23 @@ def client(
         yield test_client
 
 
-def test_get_lineup_optimizer_returns_404_for_an_uningested_league(client: TestClient) -> None:
+def test_get_lineup_optimizer_returns_403_for_a_league_the_caller_does_not_own(
+    connect_as: Callable[[dict[str, Any]], ConnectedClient], raw_fixture: dict[str, Any]
+) -> None:
+    cc = connect_as(raw_fixture)
+    response = cc.client.get("/league/424242/lineup-optimizer/1", headers=cc.headers)
+    assert response.status_code == 403
+
+
+def test_get_lineup_optimizer_requires_auth(client: TestClient) -> None:
     response = client.get("/league/424242/lineup-optimizer/1")
-    assert response.status_code == 404
+    assert response.status_code == 401
 
 
 def test_get_lineup_optimizer_returns_409_when_no_roster_is_drafted(
-    client: TestClient, pg_conn: psycopg.Connection[Any], raw_fixture: dict[str, Any]
+    pg_conn: psycopg.Connection[Any],
+    raw_fixture: dict[str, Any],
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
     pre_draft = copy.deepcopy(raw_fixture)
     for team in pre_draft["teams"]:
@@ -298,28 +308,40 @@ def test_get_lineup_optimizer_returns_409_when_no_roster_is_drafted(
     ingest_league(pg_conn, pre_draft, ingested_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     pg_conn.commit()
 
-    response = client.get(
+    # Must connect using pre_draft itself, not raw_fixture: connect_as()
+    # ingests whatever payload it's given via the real /leagues/connect
+    # path, so connecting with the fully-drafted raw_fixture here would
+    # silently overwrite the empty rosters this test depends on.
+    cc = connect_as(pre_draft)
+    response = cc.client.get(
         f"/league/{pre_draft['id']}/lineup-optimizer/{pre_draft['teams'][0]['id']}",
         params={"season_id": pre_draft["seasonId"]},
+        headers=cc.headers,
     )
     assert response.status_code == 409
 
 
 def test_get_lineup_optimizer_returns_404_for_an_unknown_team(
-    client: TestClient, pg_conn: psycopg.Connection[Any], raw_fixture: dict[str, Any]
+    pg_conn: psycopg.Connection[Any],
+    raw_fixture: dict[str, Any],
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
     ingest_league(pg_conn, raw_fixture, ingested_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     pg_conn.commit()
 
-    response = client.get(
+    cc = connect_as(raw_fixture)
+    response = cc.client.get(
         f"/league/{raw_fixture['id']}/lineup-optimizer/-999999",
         params={"season_id": raw_fixture["seasonId"]},
+        headers=cc.headers,
     )
     assert response.status_code == 404
 
 
 def test_get_lineup_optimizer_route_matches_a_direct_compute_call(
-    client: TestClient, pg_conn: psycopg.Connection[Any], raw_fixture: dict[str, Any]
+    pg_conn: psycopg.Connection[Any],
+    raw_fixture: dict[str, Any],
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
     league_id = raw_fixture["id"]
     season_id = raw_fixture["seasonId"]
@@ -342,9 +364,11 @@ def test_get_lineup_optimizer_route_matches_a_direct_compute_call(
         seed=777,
     )
 
-    response = client.get(
+    cc = connect_as(raw_fixture)
+    response = cc.client.get(
         f"/league/{league_id}/lineup-optimizer/{team_id}",
         params={"season_id": season_id, "seed": 777},
+        headers=cc.headers,
     )
     assert response.status_code == 200
     body = response.json()
@@ -361,7 +385,9 @@ def test_get_lineup_optimizer_route_matches_a_direct_compute_call(
 
 
 def test_get_lineup_optimizer_default_seed_is_deterministic_per_team(
-    client: TestClient, pg_conn: psycopg.Connection[Any], raw_fixture: dict[str, Any]
+    pg_conn: psycopg.Connection[Any],
+    raw_fixture: dict[str, Any],
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
     """No explicit seed passed -- two requests for the same league/season/team
     must still agree, via sim.api.seeds.lineup_optimizer_seed."""
@@ -371,11 +397,16 @@ def test_get_lineup_optimizer_default_seed_is_deterministic_per_team(
     ingest_league(pg_conn, raw_fixture, ingested_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     pg_conn.commit()
 
-    first = client.get(
-        f"/league/{league_id}/lineup-optimizer/{team_id}", params={"season_id": season_id}
+    cc = connect_as(raw_fixture)
+    first = cc.client.get(
+        f"/league/{league_id}/lineup-optimizer/{team_id}",
+        params={"season_id": season_id},
+        headers=cc.headers,
     )
-    second = client.get(
-        f"/league/{league_id}/lineup-optimizer/{team_id}", params={"season_id": season_id}
+    second = cc.client.get(
+        f"/league/{league_id}/lineup-optimizer/{team_id}",
+        params={"season_id": season_id},
+        headers=cc.headers,
     )
     assert first.status_code == second.status_code == 200
     assert first.json()["seed"] == second.json()["seed"]

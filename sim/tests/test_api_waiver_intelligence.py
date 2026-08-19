@@ -16,7 +16,7 @@ post-draft state.
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from typing import Any
 
@@ -35,6 +35,7 @@ from sim.api.waiver_intelligence_view import (
     _compute_from_raw,
     compute_waiver_intelligence,
 )
+from sim.tests.conftest import ConnectedClient
 
 TEST_DSN = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DSN)
 
@@ -214,26 +215,40 @@ def client(
         yield test_client
 
 
-def test_get_waiver_intelligence_returns_404_for_an_uningested_league(client: TestClient) -> None:
+def test_get_waiver_intelligence_returns_403_for_a_league_the_caller_does_not_own(
+    connect_as: Callable[[dict[str, Any]], ConnectedClient], raw_fixture: dict[str, Any]
+) -> None:
+    cc = connect_as(raw_fixture)
+    response = cc.client.get("/league/424242/waiver-intelligence/1", headers=cc.headers)
+    assert response.status_code == 403
+
+
+def test_get_waiver_intelligence_requires_auth(client: TestClient) -> None:
     response = client.get("/league/424242/waiver-intelligence/1")
-    assert response.status_code == 404
+    assert response.status_code == 401
 
 
 def test_get_waiver_intelligence_returns_404_for_an_unknown_team(
-    client: TestClient, pg_conn: psycopg.Connection[Any], raw_fixture: dict[str, Any]
+    pg_conn: psycopg.Connection[Any],
+    raw_fixture: dict[str, Any],
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
     ingest_league(pg_conn, raw_fixture, ingested_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     pg_conn.commit()
 
-    response = client.get(
+    cc = connect_as(raw_fixture)
+    response = cc.client.get(
         f"/league/{raw_fixture['id']}/waiver-intelligence/-999999",
         params={"season_id": raw_fixture["seasonId"]},
+        headers=cc.headers,
     )
     assert response.status_code == 404
 
 
 def test_get_waiver_intelligence_route_matches_a_direct_compute_call(
-    client: TestClient, pg_conn: psycopg.Connection[Any], raw_fixture: dict[str, Any]
+    pg_conn: psycopg.Connection[Any],
+    raw_fixture: dict[str, Any],
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
     league_id = raw_fixture["id"]
     season_id = raw_fixture["seasonId"]
@@ -243,9 +258,11 @@ def test_get_waiver_intelligence_route_matches_a_direct_compute_call(
 
     direct = compute_waiver_intelligence(pg_conn, league_id, season_id, team_id, limit_per_position=4)
 
-    response = client.get(
+    cc = connect_as(raw_fixture)
+    response = cc.client.get(
         f"/league/{league_id}/waiver-intelligence/{team_id}",
         params={"season_id": season_id, "limit_per_position": 4},
+        headers=cc.headers,
     )
     assert response.status_code == 200
     body = response.json()

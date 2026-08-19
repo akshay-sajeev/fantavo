@@ -15,7 +15,7 @@ real numbers" per PLAN.md.
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from typing import Any
 
@@ -32,6 +32,7 @@ from sim.api.beat_my_league_view import (
     UnknownTeamError,
     _compute_from_raw,
 )
+from sim.tests.conftest import ConnectedClient
 
 TEST_DSN = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DSN)
 
@@ -219,10 +220,13 @@ def client(pg_conn: psycopg.Connection[Any]) -> Iterator[TestClient]:
 
 
 def test_route_matches_a_direct_compute_call(
-    client: TestClient, real_league_id: int, raw_fixture: dict[str, Any]
+    real_league_id: int,
+    raw_fixture: dict[str, Any],
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
     team_id = raw_fixture["teams"][0]["id"]
-    resp = client.get(f"/league/{real_league_id}/beat-my-league/{team_id}")
+    cc = connect_as(raw_fixture)
+    resp = cc.client.get(f"/league/{real_league_id}/beat-my-league/{team_id}", headers=cc.headers)
     assert resp.status_code == 200
     body = resp.json()
 
@@ -235,11 +239,24 @@ def test_route_matches_a_direct_compute_call(
     assert isinstance(body["trade_cautions"], list)
 
 
-def test_route_404s_for_an_unknown_team_id(client: TestClient, real_league_id: int) -> None:
-    resp = client.get(f"/league/{real_league_id}/beat-my-league/999999")
+def test_route_404s_for_an_unknown_team_id(
+    real_league_id: int,
+    raw_fixture: dict[str, Any],
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
+) -> None:
+    cc = connect_as(raw_fixture)
+    resp = cc.client.get(f"/league/{real_league_id}/beat-my-league/999999", headers=cc.headers)
     assert resp.status_code == 404
 
 
-def test_route_404s_for_an_uningested_league(client: TestClient) -> None:
+def test_route_returns_403_for_a_league_the_caller_does_not_own(
+    connect_as: Callable[[dict[str, Any]], ConnectedClient], raw_fixture: dict[str, Any]
+) -> None:
+    cc = connect_as(raw_fixture)
+    resp = cc.client.get("/league/1/beat-my-league/1", headers=cc.headers)
+    assert resp.status_code == 403
+
+
+def test_route_requires_auth(client: TestClient) -> None:
     resp = client.get("/league/1/beat-my-league/1")
-    assert resp.status_code == 404
+    assert resp.status_code == 401

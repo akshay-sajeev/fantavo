@@ -1527,6 +1527,7 @@ def get_lineup_optimizer(
     season_id: int | None = None,
     seed: int | None = None,
     conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+    _owner: auth_view.AuthedUser = Depends(require_league_owner),  # noqa: B008 (idiomatic FastAPI)
 ) -> LineupOptimizerResponse:
     """Current / safest / highest-upside lineups for one team -- see
     `sim.api.lineup_optimizer_view`'s module docstring for the full
@@ -1561,6 +1562,7 @@ def get_waiver_intelligence(
     season_id: int | None = None,
     limit_per_position: int = WAIVER_DEFAULT_LIMIT_PER_POSITION,
     conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+    _owner: auth_view.AuthedUser = Depends(require_league_owner),  # noqa: B008 (idiomatic FastAPI)
 ) -> WaiverIntelligenceResponse:
     """A ranked, position-grouped waiver-wire priority list for one team,
     scored on opportunity / availability / league fit / competition -- see
@@ -1593,6 +1595,7 @@ def get_beat_my_league(
     team_id: int,
     season_id: int | None = None,
     conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+    _owner: auth_view.AuthedUser = Depends(require_league_owner),  # noqa: B008 (idiomatic FastAPI)
 ) -> BeatMyLeagueResponse:
     """Every team's title odds / structural strengths & weaknesses / playoff
     schedule difficulty, plus one selected team's biggest threat, real
