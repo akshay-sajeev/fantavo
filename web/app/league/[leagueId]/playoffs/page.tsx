@@ -1,4 +1,5 @@
 import { getPlayoffPlanner } from "@/lib/api";
+import { getSessionToken } from "@/lib/auth";
 import { ApiErrorPanel } from "@/components/shared/api-error-panel";
 import { BracketPanel } from "@/components/playoffs/bracket-panel";
 import { SeedingOddsTable } from "@/components/playoffs/seeding-odds-table";
@@ -12,10 +13,11 @@ export default async function PlayoffPlannerPage({
 }) {
   const { leagueId } = await params;
   const id = Number(leagueId);
+  const token = (await getSessionToken())!;
 
   let planner;
   try {
-    planner = await getPlayoffPlanner(id);
+    planner = await getPlayoffPlanner(token, id);
   } catch (error) {
     return (
       <div className="py-6">

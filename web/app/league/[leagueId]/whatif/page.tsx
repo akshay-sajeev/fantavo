@@ -1,4 +1,5 @@
 import { getRoster } from "@/lib/api";
+import { getSessionToken } from "@/lib/auth";
 import { ApiErrorPanel } from "@/components/shared/api-error-panel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TradeBuilder } from "@/components/whatif/trade-builder";
@@ -20,10 +21,11 @@ export default async function WhatIfPage({
 }) {
   const { leagueId } = await params;
   const id = Number(leagueId);
+  const token = (await getSessionToken())!;
 
   let roster;
   try {
-    roster = await getRoster(id);
+    roster = await getRoster(token, id);
   } catch (error) {
     return (
       <div className="py-6">

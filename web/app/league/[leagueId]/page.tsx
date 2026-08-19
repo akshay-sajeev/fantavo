@@ -1,4 +1,5 @@
 import { getRoster, getSchedule, getSimulation } from "@/lib/api";
+import { getSessionToken } from "@/lib/auth";
 import { ApiErrorPanel } from "@/components/shared/api-error-panel";
 import { StandingsTable } from "@/components/dashboard/standings-table";
 import { CurrentMatchupCard } from "@/components/dashboard/current-matchup-card";
@@ -14,13 +15,14 @@ export default async function DashboardPage({
 }) {
   const { leagueId } = await params;
   const id = Number(leagueId);
+  const token = (await getSessionToken())!;
 
   let simulation, schedule, roster;
   try {
     [simulation, schedule, roster] = await Promise.all([
-      getSimulation(id),
-      getSchedule(id),
-      getRoster(id),
+      getSimulation(token, id),
+      getSchedule(token, id),
+      getRoster(token, id),
     ]);
   } catch (error) {
     return (

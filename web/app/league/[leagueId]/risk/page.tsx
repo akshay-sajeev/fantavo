@@ -1,4 +1,5 @@
 import { getRoster } from "@/lib/api";
+import { getSessionToken } from "@/lib/auth";
 import { ApiErrorPanel } from "@/components/shared/api-error-panel";
 import { TeamRiskCard } from "@/components/risk/team-risk-card";
 
@@ -9,10 +10,11 @@ export default async function RiskPage({
 }) {
   const { leagueId } = await params;
   const id = Number(leagueId);
+  const token = (await getSessionToken())!;
 
   let roster;
   try {
-    roster = await getRoster(id);
+    roster = await getRoster(token, id);
   } catch (error) {
     return (
       <div className="py-6">

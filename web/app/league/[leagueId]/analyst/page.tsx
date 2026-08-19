@@ -1,4 +1,5 @@
 import { getRoster } from "@/lib/api";
+import { getSessionToken } from "@/lib/auth";
 import { ApiErrorPanel } from "@/components/shared/api-error-panel";
 import { TeamNavSelect } from "@/components/shared/team-nav-select";
 import { AnalystChat } from "@/components/analyst/chat";
@@ -22,10 +23,11 @@ export default async function AnalystPage({
   const { leagueId } = await params;
   const { team } = await searchParams;
   const id = Number(leagueId);
+  const token = (await getSessionToken())!;
 
   let roster;
   try {
-    roster = await getRoster(id);
+    roster = await getRoster(token, id);
   } catch (error) {
     return (
       <div className="py-6">

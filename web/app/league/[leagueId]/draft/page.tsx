@@ -1,4 +1,5 @@
 import { getDraftAutopsy } from "@/lib/api";
+import { getSessionToken } from "@/lib/auth";
 import { ApiErrorPanel } from "@/components/shared/api-error-panel";
 import { DraftBoardGrid } from "@/components/draft/draft-board-grid";
 import { TeamDraftReportCard } from "@/components/draft/team-draft-report-card";
@@ -11,10 +12,11 @@ export default async function DraftAutopsyPage({
 }) {
   const { leagueId } = await params;
   const id = Number(leagueId);
+  const token = (await getSessionToken())!;
 
   let autopsy;
   try {
-    autopsy = await getDraftAutopsy(id);
+    autopsy = await getDraftAutopsy(token, id);
   } catch (error) {
     return (
       <div className="py-6">

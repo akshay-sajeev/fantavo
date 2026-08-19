@@ -1,5 +1,6 @@
 import { Rocket, Shield, ListChecks } from "lucide-react";
 import { getLineupOptimizer, getRoster } from "@/lib/api";
+import { getSessionToken } from "@/lib/auth";
 import { describeLineupTradeoff } from "@/lib/lineup-optimizer";
 import { ApiErrorPanel } from "@/components/shared/api-error-panel";
 import { FramingNote } from "@/components/lineup/framing-note";
@@ -23,10 +24,11 @@ export default async function LineupOptimizerPage({
   const { leagueId } = await params;
   const { team } = await searchParams;
   const id = Number(leagueId);
+  const token = (await getSessionToken())!;
 
   let roster;
   try {
-    roster = await getRoster(id);
+    roster = await getRoster(token, id);
   } catch (error) {
     return (
       <div className="py-6">
@@ -50,7 +52,7 @@ export default async function LineupOptimizerPage({
 
   let optimizer;
   try {
-    optimizer = await getLineupOptimizer(id, selectedTeamId);
+    optimizer = await getLineupOptimizer(token, id, selectedTeamId);
   } catch (error) {
     return (
       <div className="space-y-4 py-4">

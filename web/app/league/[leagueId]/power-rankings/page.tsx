@@ -1,4 +1,5 @@
 import { getPowerRankingRoast, getSimulation } from "@/lib/api";
+import { getSessionToken } from "@/lib/auth";
 import { ApiErrorPanel } from "@/components/shared/api-error-panel";
 import { DraftDataNote } from "@/components/roast/draft-data-note";
 import { RankingsBarChart } from "@/components/power-rankings/rankings-bar-chart";
@@ -13,10 +14,14 @@ export default async function PowerRankingsPage({
 }) {
   const { leagueId } = await params;
   const id = Number(leagueId);
+  const token = (await getSessionToken())!;
 
   let simulation, roast;
   try {
-    [simulation, roast] = await Promise.all([getSimulation(id), getPowerRankingRoast(id)]);
+    [simulation, roast] = await Promise.all([
+      getSimulation(token, id),
+      getPowerRankingRoast(token, id),
+    ]);
   } catch (error) {
     return (
       <div className="py-6">

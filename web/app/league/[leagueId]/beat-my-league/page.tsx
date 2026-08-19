@@ -1,4 +1,5 @@
 import { getBeatMyLeague, getRoster } from "@/lib/api";
+import { getSessionToken } from "@/lib/auth";
 import { AdvantageCard } from "@/components/beat-my-league/advantage-card";
 import { LeagueComparisonTable } from "@/components/beat-my-league/league-comparison-table";
 import { ThreatCard } from "@/components/beat-my-league/threat-card";
@@ -36,10 +37,11 @@ export default async function BeatMyLeaguePage({
   const { leagueId } = await params;
   const { team } = await searchParams;
   const id = Number(leagueId);
+  const token = (await getSessionToken())!;
 
   let roster;
   try {
-    roster = await getRoster(id);
+    roster = await getRoster(token, id);
   } catch (error) {
     return (
       <div className="py-6">
@@ -67,7 +69,7 @@ export default async function BeatMyLeaguePage({
 
   let analysis;
   try {
-    analysis = await getBeatMyLeague(id, selectedTeamId);
+    analysis = await getBeatMyLeague(token, id, selectedTeamId);
   } catch (error) {
     return (
       <div className="space-y-4 py-4">
