@@ -1,16 +1,22 @@
 import { redirect } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth";
+import { getLeagueConnection } from "@/lib/leagueConnection";
 
 /**
- * Redirects to a default league id from DEFAULT_LEAGUE_ID so the app has
- * somewhere to land; every page under /league/[leagueId] is fully generic
- * on that route param and does not special-case which league id it
- * receives. The account/session flow lives downstream of this redirect,
- * not here: web/middleware.ts gates /league/:path* on a session cookie and
- * sends an unauthenticated visitor to /login (which redirects back to
- * /league/{DEFAULT_LEAGUE_ID} on success); every user still sees the same
- * DEFAULT_LEAGUE_ID today (per-user league data is Phase B).
+ * Auth Phase B: DEFAULT_LEAGUE_ID and the unconditional redirect it drove
+ * are gone -- every signed-in user now lands on their own real connected
+ * league. web/middleware.ts still gates /league/:path* on the session
+ * cookie and sends an unauthenticated visitor to /login; this page adds
+ * the next layer once signed in: no connection yet -> /connect-league,
+ * connected but no team picked -> /connect-league/pick-team, both set ->
+ * their real league.
  */
-export default function RootPage() {
-  const defaultLeagueId = process.env.DEFAULT_LEAGUE_ID ?? "-1990001";
-  redirect(`/league/${defaultLeagueId}`);
+export default async function RootPage() {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
+  const connection = await getLeagueConnection();
+  if (!connection?.league_id) redirect("/connect-league");
+  if (!connection.team_id) redirect("/connect-league/pick-team");
+  redirect(`/league/${connection.league_id}`);
 }
