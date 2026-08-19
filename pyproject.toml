@@ -48,6 +48,11 @@ testpaths = ["sim/tests", "ingest/tests"]
 [tool.mypy]
 strict = true
 plugins = ["numpy.typing.mypy_plugin"]
+# Resolve module names from the repo root when checking sim/ingest/api together;
+# api/ has no __init__.py (deliberate -- implicit namespace packages, matching
+# pythonpath = ["."] in [tool.pytest.ini_options]) and strict mypy reports
+# api/index.py as "found twice under different module names" without this.
+explicit_package_bases = true
 
 # APScheduler ships no py.typed marker / stubs (see sim/api/scheduler.py).
 # Everything this repo calls on it is a handful of well-documented methods
