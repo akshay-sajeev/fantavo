@@ -44,41 +44,6 @@ export class ApiError extends Error {
   }
 }
 
-async function getJson<T>(
-  path: string,
-  params: Record<string, string | number | undefined> = {},
-): Promise<T> {
-  const url = new URL(path, API_BASE);
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined) url.searchParams.set(key, String(value));
-  }
-
-  let res: Response;
-  try {
-    res = await fetch(url, { cache: "no-store" });
-  } catch (cause) {
-    throw new ApiError(
-      0,
-      `could not reach the sim API at ${API_BASE} -- is uvicorn running? (${String(cause)})`,
-    );
-  }
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    // FastAPI's HTTPException body is {"detail": "..."} -- unwrap it so the
-    // UI shows the human-readable message rather than raw JSON.
-    let detail = body;
-    try {
-      const parsed = JSON.parse(body) as { detail?: unknown };
-      if (typeof parsed.detail === "string") detail = parsed.detail;
-    } catch {
-      // not JSON -- fall through and use the raw body text
-    }
-    throw new ApiError(res.status, detail || res.statusText);
-  }
-  return (await res.json()) as T;
-}
-
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const url = new URL(path, API_BASE);
 
