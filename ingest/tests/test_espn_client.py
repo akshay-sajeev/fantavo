@@ -103,3 +103,15 @@ def test_fetch_live_league_survives_a_failed_free_agent_call() -> None:
 
     result = fetch_live_league(999, 2026, None, None, transport=_PartialFailureTransport())
     assert result["_freeAgents"] == []
+
+
+def test_fetch_live_league_survives_a_raised_error_on_the_free_agent_call() -> None:
+    class _PartialRaisingTransport:
+        def get(self, url: str, **kwargs: Any) -> _FakeResponse:
+            params = kwargs.get("params") or []
+            if ("view", "kona_player_info") in params:
+                raise requests.ConnectionError("no route to host")
+            return _FakeResponse(200, {"id": 999, "teams": []})
+
+    result = fetch_live_league(999, 2026, None, None, transport=_PartialRaisingTransport())
+    assert result["_freeAgents"] == []

@@ -99,13 +99,16 @@ def fetch_live_league(
 
     league: dict[str, Any] = response.json()
 
-    fa_response = session.get(
-        url,
-        params=[("view", "kona_player_info")],
-        cookies=cookies,
-        headers={"X-Fantasy-Filter": json.dumps(FREE_AGENT_FILTER)},
-        timeout=30,
-    )
-    league["_freeAgents"] = fa_response.json().get("players", []) if fa_response.ok else []
+    try:
+        fa_response = session.get(
+            url,
+            params=[("view", "kona_player_info")],
+            cookies=cookies,
+            headers={"X-Fantasy-Filter": json.dumps(FREE_AGENT_FILTER)},
+            timeout=30,
+        )
+        league["_freeAgents"] = fa_response.json().get("players", []) if fa_response.ok else []
+    except requests.RequestException:
+        league["_freeAgents"] = []
 
     return league
