@@ -173,42 +173,32 @@ convention for it.
 
 ### `web/lib/api.ts`
 
-`postLeagueRefresh` does **not** reuse the shared `authedFetch`/`postJson`
-helpers' throw-on-non-2xx behavior, because a 429 here is an expected,
-structured outcome the caller needs to render (the cooldown countdown),
-not a failure to propagate as an `ApiError`. Genuine failures (502, 500,
-network unreachable) still throw `ApiError`, exactly like every other
-function in this file.
+Every other function in this file returns exactly the raw API response
+type and throws `ApiError` for anything non-2xx -- the file's own
+docstring is explicit that no response is transformed here. Rather than
+break that with a one-off union return type, `ApiError` gains one new
+optional field, `retryAfterSeconds`, populated from the `Retry-After`
+response header whenever it's present (harmless for every existing
+caller, which never looks at it). `postLeagueRefresh` then fits the file's
+existing shape exactly: it always throws on non-2xx, including 429.
 
 ```typescript
-export type RefreshLeagueResult =
-  | { status: "ok"; ingestedAt: string | null; oddsUpdated: boolean }
-  | { status: "cooldown"; retryAfterSeconds: number };
-
-export async function postLeagueRefresh(
-  token: string,
-  leagueId: number,
-): Promise<RefreshLeagueResult> {
-  const url = new URL(`/league/${leagueId}/refresh`, API_BASE);
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-      cache: "no-store",
-    });
-  } catch (cause) {
-    throw new ApiError(
-      0,
-      `could not reach the sim API at ${API_BASE} -- is uvicorn running? (${String(cause)})`,
-    );
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+    public readonly retryAfterSeconds?: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
   }
+}
+```
 
-  if (res.status === 429) {
-    const retryAfter = Number(res.headers.get("Retry-After") ?? "300");
-    return { status: "cooldown", retryAfterSeconds: Number.isFinite(retryAfter) ? retryAfter : 300 };
-  }
+`authedFetch`'s existing non-`res.ok` branch gains one line reading the
+header:
 
+```typescript
   if (!res.ok) {
     const responseBody = await res.text().catch(() => "");
     let detail = responseBody;
@@ -218,11 +208,38 @@ export async function postLeagueRefresh(
     } catch {
       // not JSON -- fall through and use the raw body text
     }
-    throw new ApiError(res.status, detail || res.statusText);
+    const retryAfterHeader = res.headers.get("Retry-After");
+    const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : undefined;
+    throw new ApiError(
+      res.status,
+      detail || res.statusText,
+      Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : undefined,
+    );
   }
+```
 
-  const body = (await res.json()) as { status: string; ingested_at: string | null; odds_updated: boolean };
-  return { status: "ok", ingestedAt: body.ingested_at, oddsUpdated: body.odds_updated };
+`RefreshLeagueResponse` (raw JSON shape, matching the sim API's Pydantic
+model field-for-field, same convention as every other type in
+`web/lib/types.ts`) is added there:
+
+```typescript
+export interface RefreshLeagueResponse {
+  status: string;
+  ingested_at: string | null;
+  odds_updated: boolean;
+}
+```
+
+And `postLeagueRefresh` itself is a two-line pass-through, identical in
+shape to `postLeaguesTeam`/`getLeaguesMe`:
+
+```typescript
+export async function postLeagueRefresh(
+  token: string,
+  leagueId: number,
+): Promise<RefreshLeagueResponse> {
+  const res = await authedFetch(`/league/${leagueId}/refresh`, token, "POST");
+  return (await res.json()) as RefreshLeagueResponse;
 }
 ```
 
@@ -230,8 +247,10 @@ export async function postLeagueRefresh(
 
 Same shape as `season-replay/route.ts`: `getCurrentUser` (401 if none),
 `ownsLeague` (403 if not owned), forward via `postLeagueRefresh`. The
-cooldown result is **not** an exception here either -- it's serialized
-straight through with its real status code:
+existing `catch (error)` block's status-mapping is extended by one line to
+mirror `retryAfterSeconds` into both the JSON body (so the client
+component can read it without touching headers) and the real `Retry-After`
+header (so the response stays a standards-correct 429 too):
 
 ```typescript
 export async function POST(
@@ -250,29 +269,45 @@ export async function POST(
 
   try {
     const result = await postLeagueRefresh(token, id);
-    if (result.status === "cooldown") {
-      return NextResponse.json(result, {
-        status: 429,
-        headers: { "Retry-After": String(result.retryAfterSeconds) },
-      });
-    }
     return NextResponse.json(result);
   } catch (error) {
     const status = error instanceof ApiError && error.status >= 400 ? error.status : 502;
     const message = error instanceof Error ? error.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status });
+    const retryAfterSeconds = error instanceof ApiError ? error.retryAfterSeconds : undefined;
+    return NextResponse.json(
+      { error: message, retry_after_seconds: retryAfterSeconds },
+      {
+        status,
+        headers: retryAfterSeconds !== undefined ? { "Retry-After": String(retryAfterSeconds) } : {},
+      },
+    );
   }
 }
 ```
 
 ### `web/components/dashboard/refresh-button.tsx`
 
-Client Component, `leagueId: number` prop. Internal state machine:
-`idle -> refreshing -> (cooldown | error)`, with `cooldown` also being
-`idle`'s entry state after a successful click (client-managed 5-minute
-countdown, corrected by the server's `retryAfterSeconds` if a click during
-what the client thought was "idle" comes back `cooldown` instead --
-someone else refreshed, or the daily cron ran).
+Client Component, `leagueId: number` prop. Fetches the Route Handler
+directly (`fetch("/api/league/{id}/refresh", {method: "POST"})`) -- a
+Client Component can never import `web/lib/api.ts` (it's marked
+`import "server-only"`), so this is the one place in the feature that
+talks to the Next.js server rather than to `sim` directly. Reads the JSON
+body regardless of status (the Route Handler always returns one, success
+or error):
+
+```typescript
+const res = await fetch(`/api/league/${leagueId}/refresh`, { method: "POST" });
+const body = (await res.json()) as
+  | { status: string; ingested_at: string | null; odds_updated: boolean }
+  | { error: string; retry_after_seconds?: number };
+```
+
+Internal state machine: `idle -> refreshing -> (cooldown | error)`, with
+`cooldown` also being `idle`'s entry state after a successful click
+(client-managed 5-minute countdown, corrected by the server's
+`retry_after_seconds` if a click during what the client thought was
+"idle" comes back a 429 instead -- someone else refreshed, or the daily
+cron ran).
 
 - **idle**: `Refresh` button, enabled.
 - **refreshing**: `Refreshing…`, disabled, small spinner.
@@ -283,20 +318,24 @@ someone else refreshed, or the daily cron ran).
   immediately re-enabled -- an error isn't a cooldown, no reason to block
   retrying.
 
-On a successful response (`status: "ok"`), call Next's `router.refresh()`
+On `res.ok` (`body.status === "ok"`), call Next's `router.refresh()`
 (from `next/navigation`) so the Server Component page re-fetches
 `getSimulation`/`getRoster`/`getSchedule` -- the whole point of the
 button is that the dashboard's own numbers update, not just the button.
 
-Whether to enter the `cooldown` state afterward depends on `ingestedAt`:
-if it's non-null, something actually changed and the server's own
-`league.ingested_at` check would block a retry for 5 minutes, so the
-client starts the same countdown, seeded from now. If it's `null` (the
-`IngestError`/pre-draft case -- nothing changed), the server's cooldown
-check wouldn't block an immediate retry either (it compares against
-whatever `ingested_at` already was), so the button returns straight to
-`idle` instead of showing a countdown the server wouldn't actually
-enforce.
+Whether to enter the `cooldown` state afterward depends on
+`body.ingested_at`: if it's non-null, something actually changed and the
+server's own `league.ingested_at` check would block a retry for 5
+minutes, so the client starts the same countdown, seeded from now. If
+it's `null` (the `IngestError`/pre-draft case -- nothing changed), the
+server's cooldown check wouldn't block an immediate retry either (it
+compares against whatever `ingested_at` already was), so the button
+returns straight to `idle` instead of showing a countdown the server
+wouldn't actually enforce.
+
+On `res.status === 429`, read `body.retry_after_seconds` and enter
+`cooldown` seeded with that value directly, rather than assuming 5
+minutes. On any other non-ok status, enter `error`.
 
 ### `web/app/league/[leagueId]/page.tsx`
 
