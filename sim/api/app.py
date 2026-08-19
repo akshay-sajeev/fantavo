@@ -1117,10 +1117,24 @@ class LeagueConnectionOut(BaseModel):
 _scheduler: Any = None
 
 
+def _should_run_in_process_scheduler() -> bool:
+    """False on Vercel (VERCEL=1, set automatically by Vercel's runtime --
+    verify this exact variable against Vercel's current docs at deploy
+    time, see docs/decisions.md's Vercel Serverless Migration entry): a
+    serverless function has no persistent process for an in-process
+    APScheduler background thread to survive between invocations, and
+    Vercel Cron Jobs calling /internal/precompute and /internal/reingest
+    take over that role there instead. True everywhere else (local
+    `uvicorn`, or a future non-Vercel host), preserving automatic
+    recurring precompute/reingest for local development."""
+    return os.environ.get("VERCEL") != "1"
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     global _scheduler
-    _scheduler = start_scheduler()
+    if _should_run_in_process_scheduler():
+        _scheduler = start_scheduler()
     try:
         yield
     finally:

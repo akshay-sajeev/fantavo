@@ -31,6 +31,20 @@ from sim.tests.conftest import ConnectedClient
 TEST_DSN = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DSN)
 
 
+def test_should_run_in_process_scheduler_is_true_when_vercel_is_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("VERCEL", raising=False)
+    assert app_module._should_run_in_process_scheduler() is True
+
+
+def test_should_run_in_process_scheduler_is_false_on_vercel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VERCEL", "1")
+    assert app_module._should_run_in_process_scheduler() is False
+
+
 @pytest.fixture()
 def client(
     pg_conn: psycopg.Connection[Any], monkeypatch: pytest.MonkeyPatch
