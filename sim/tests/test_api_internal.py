@@ -46,7 +46,7 @@ def test_trigger_precompute_401s_with_no_authorization_header(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("CRON_SECRET", raising=False)
-    response = client.post("/internal/precompute")
+    response = client.get("/internal/precompute")
     assert response.status_code == 401
 
 
@@ -54,7 +54,7 @@ def test_trigger_precompute_401s_with_the_wrong_secret(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CRON_SECRET", "a-real-cron-secret")
-    response = client.post(
+    response = client.get(
         "/internal/precompute", headers={"Authorization": "Bearer wrong-secret"}
     )
     assert response.status_code == 401
@@ -68,7 +68,7 @@ def test_trigger_precompute_caches_the_synthetic_league(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("CRON_SECRET", "a-real-cron-secret")
-    response = client.post(
+    response = client.get(
         "/internal/precompute", headers={"Authorization": "Bearer a-real-cron-secret"}
     )
     assert response.status_code == 200
@@ -83,7 +83,7 @@ def test_trigger_reingest_401s_with_no_authorization_header(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("CRON_SECRET", raising=False)
-    response = client.post("/internal/reingest")
+    response = client.get("/internal/reingest")
     assert response.status_code == 401
 
 
@@ -105,7 +105,7 @@ def test_trigger_reingest_updates_ingested_at_for_a_connected_user(
     monkeypatch.setattr(reingest, "fetch_live_league", lambda *a, **k: raw_fixture)
     monkeypatch.setenv("CRON_SECRET", "a-real-cron-secret")
 
-    response = client.post(
+    response = client.get(
         "/internal/reingest", headers={"Authorization": "Bearer a-real-cron-secret"}
     )
     assert response.status_code == 200

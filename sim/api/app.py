@@ -1259,7 +1259,7 @@ def health(conn: psycopg.Connection[Any] = Depends(get_connection)) -> dict[str,
     return {"status": "ok"}
 
 
-@app.post("/internal/precompute")
+@app.get("/internal/precompute")
 def trigger_precompute(
     _: None = Depends(require_cron_secret),
     conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
@@ -1272,7 +1272,7 @@ def trigger_precompute(
     return {"status": "ok"}
 
 
-@app.post("/internal/reingest")
+@app.get("/internal/reingest")
 def trigger_reingest(
     _: None = Depends(require_cron_secret),
     conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
