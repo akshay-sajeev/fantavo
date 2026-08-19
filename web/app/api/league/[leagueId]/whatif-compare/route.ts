@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { ApiError, postWhatif } from "@/lib/api";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, getSessionToken } from "@/lib/auth";
 import { ownsLeague } from "@/lib/leagueConnection";
 import type { WhatIfCompareResponse } from "@/lib/types";
 
@@ -43,6 +43,7 @@ export async function POST(
   if (!(await ownsLeague(id))) {
     return NextResponse.json({ error: "not authorized for this league" }, { status: 403 });
   }
+  const token = (await getSessionToken())!;
 
   let body: { season_id?: number; overrides: Record<string, number[]>; n_sims?: number };
   try {
@@ -64,13 +65,13 @@ export async function POST(
 
   try {
     const [before, after] = await Promise.all([
-      postWhatif(id, {
+      postWhatif(token, id, {
         season_id: body.season_id,
         roster_overrides: {},
         n_sims: body.n_sims,
         seed,
       }),
-      postWhatif(id, {
+      postWhatif(token, id, {
         season_id: body.season_id,
         roster_overrides: overrides,
         n_sims: body.n_sims,

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { ApiError, postSeasonReplay } from "@/lib/api";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, getSessionToken } from "@/lib/auth";
 import { ownsLeague } from "@/lib/leagueConnection";
 
 /** Thin pass-through to POST /league/{id}/whatif/season-replay -- see
@@ -22,6 +22,7 @@ export async function POST(
   if (!(await ownsLeague(id))) {
     return NextResponse.json({ error: "not authorized for this league" }, { status: 403 });
   }
+  const token = (await getSessionToken())!;
 
   let body: { season_id?: number; seed?: number } = {};
   try {
@@ -31,7 +32,7 @@ export async function POST(
   }
 
   try {
-    const result = await postSeasonReplay(id, body);
+    const result = await postSeasonReplay(token, id, body);
     return NextResponse.json(result);
   } catch (error) {
     const status = error instanceof ApiError && error.status >= 400 ? error.status : 502;
