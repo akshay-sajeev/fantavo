@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import copy
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from typing import Any
 
@@ -31,6 +31,7 @@ from sim.api.playoff_planner_view import (
     compute_playoff_planner,
 )
 from sim.engine import bracket_pairings
+from sim.tests.conftest import ConnectedClient
 
 TEST_DSN = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DSN)
 
@@ -288,13 +289,23 @@ def client(
         yield test_client
 
 
-def test_get_playoff_planner_returns_404_for_an_uningested_league(client: TestClient) -> None:
+def test_get_playoff_planner_returns_403_for_a_league_the_caller_does_not_own(
+    connect_as: Callable[[dict[str, Any]], ConnectedClient], raw_fixture: dict[str, Any]
+) -> None:
+    cc = connect_as(raw_fixture)
+    response = cc.client.get("/league/424242/playoff-planner", headers=cc.headers)
+    assert response.status_code == 403
+
+
+def test_get_playoff_planner_requires_auth(client: TestClient) -> None:
     response = client.get("/league/424242/playoff-planner")
-    assert response.status_code == 404
+    assert response.status_code == 401
 
 
 def test_get_playoff_planner_returns_409_when_no_roster_is_drafted(
-    client: TestClient, pg_conn: psycopg.Connection[Any], raw_fixture: dict[str, Any]
+    pg_conn: psycopg.Connection[Any],
+    raw_fixture: dict[str, Any],
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
     pre_draft = copy.deepcopy(raw_fixture)
     for team in pre_draft["teams"]:
@@ -302,14 +313,23 @@ def test_get_playoff_planner_returns_409_when_no_roster_is_drafted(
     ingest_league(pg_conn, pre_draft, ingested_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     pg_conn.commit()
 
-    response = client.get(
-        f"/league/{pre_draft['id']}/playoff-planner", params={"season_id": pre_draft["seasonId"]}
+    # Must connect using pre_draft itself, not raw_fixture: connect_as()
+    # ingests whatever payload it's given via the real /leagues/connect
+    # path, so connecting with the fully-drafted raw_fixture here would
+    # silently overwrite the empty rosters this test depends on.
+    cc = connect_as(pre_draft)
+    response = cc.client.get(
+        f"/league/{pre_draft['id']}/playoff-planner",
+        params={"season_id": pre_draft["seasonId"]},
+        headers=cc.headers,
     )
     assert response.status_code == 409
 
 
 def test_get_playoff_planner_route_matches_a_direct_compute_call(
-    client: TestClient, pg_conn: psycopg.Connection[Any], raw_fixture: dict[str, Any]
+    pg_conn: psycopg.Connection[Any],
+    raw_fixture: dict[str, Any],
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
     league_id = raw_fixture["id"]
     season_id = raw_fixture["seasonId"]
@@ -322,9 +342,11 @@ def test_get_playoff_planner_route_matches_a_direct_compute_call(
     # the rest of this file uses for standalone grading-logic checks.
     direct = compute_playoff_planner(pg_conn, league_id, season_id, n_sims=DEFAULT_N_SIMS)
 
-    response = client.get(
+    cc = connect_as(raw_fixture)
+    response = cc.client.get(
         f"/league/{league_id}/playoff-planner",
         params={"season_id": season_id},
+        headers=cc.headers,
     )
     assert response.status_code == 200
     body = response.json()
@@ -345,11 +367,17 @@ def test_get_playoff_planner_route_matches_a_direct_compute_call(
 
 
 def test_get_playoff_planner_works_for_the_synthetic_league(
-    client: TestClient, synthetic_league_id: int, raw_fixture: dict[str, Any]
+    synthetic_league_id: int,
+    raw_fixture: dict[str, Any],
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
-    response = client.get(
+    from scripts.ingest_synthetic_league import build_synthetic_raw_payload
+
+    cc = connect_as(build_synthetic_raw_payload(raw_fixture))
+    response = cc.client.get(
         f"/league/{synthetic_league_id}/playoff-planner",
         params={"season_id": raw_fixture["seasonId"]},
+        headers=cc.headers,
     )
     assert response.status_code == 200
     body = response.json()

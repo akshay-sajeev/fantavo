@@ -1474,6 +1474,7 @@ def get_draft_autopsy(
     league_id: int,
     season_id: int | None = None,
     conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+    _owner: auth_view.AuthedUser = Depends(require_league_owner),  # noqa: B008 (idiomatic FastAPI)
 ) -> DraftAutopsyResponse:
     """Per-pick draft grading -- see sim.api.draft_autopsy_view's module
     docstring for the full methodology and the rank-source/data-provenance
@@ -1496,6 +1497,7 @@ def get_playoff_planner(
     league_id: int,
     season_id: int | None = None,
     conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+    _owner: auth_view.AuthedUser = Depends(require_league_owner),  # noqa: B008 (idiomatic FastAPI)
 ) -> PlayoffPlannerResponse:
     """Projected playoff bracket, seeding odds, and per-roster-slot playoff-
     window strength -- see `sim.api.playoff_planner_view`'s module docstring
@@ -1620,6 +1622,7 @@ def get_power_ranking_roast(
     league_id: int,
     season_id: int | None = None,
     conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+    _owner: auth_view.AuthedUser = Depends(require_league_owner),  # noqa: B008 (idiomatic FastAPI)
 ) -> PowerRankingRoastResponse:
     """A good-natured, per-team roast grounded entirely in real, already-
     computed facts (simulated title-odds rank, a real draft reach/steal,

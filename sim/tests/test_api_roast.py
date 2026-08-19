@@ -13,7 +13,7 @@ that draft material is optional while everything else stays real.
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from typing import Any
 
@@ -25,6 +25,7 @@ from ingest.db import DEFAULT_TEST_DSN, ingest_league
 from scripts.ingest_synthetic_league import build_synthetic_raw_payload
 from sim.api import app as app_module
 from sim.api.roast_view import _REACH_THRESHOLD, _STEAL_THRESHOLD, _compute_from_raw
+from sim.tests.conftest import ConnectedClient
 
 TEST_DSN = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DSN)
 
@@ -220,9 +221,12 @@ def client(pg_conn: psycopg.Connection[Any]) -> Iterator[TestClient]:
 
 
 def test_route_matches_a_direct_compute_call(
-    client: TestClient, real_league_id: int, raw_fixture: dict[str, Any]
+    real_league_id: int,
+    raw_fixture: dict[str, Any],
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
-    resp = client.get(f"/league/{real_league_id}/power-ranking-roast")
+    cc = connect_as(raw_fixture)
+    resp = cc.client.get(f"/league/{real_league_id}/power-ranking-roast", headers=cc.headers)
     assert resp.status_code == 200
     body = resp.json()
 
@@ -235,6 +239,14 @@ def test_route_matches_a_direct_compute_call(
         assert team["facts"]
 
 
-def test_route_404s_for_an_uningested_league(client: TestClient) -> None:
+def test_route_returns_403_for_a_league_the_caller_does_not_own(
+    connect_as: Callable[[dict[str, Any]], ConnectedClient], raw_fixture: dict[str, Any]
+) -> None:
+    cc = connect_as(raw_fixture)
+    resp = cc.client.get("/league/1/power-ranking-roast", headers=cc.headers)
+    assert resp.status_code == 403
+
+
+def test_route_requires_auth(client: TestClient) -> None:
     resp = client.get("/league/1/power-ranking-roast")
-    assert resp.status_code == 404
+    assert resp.status_code == 401

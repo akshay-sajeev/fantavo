@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import copy
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from typing import Any
 
@@ -34,6 +34,7 @@ from sim.api.draft_autopsy_view import (
     _compute_from_raw,
     compute_draft_autopsy,
 )
+from sim.tests.conftest import ConnectedClient
 
 TEST_DSN = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DSN)
 
@@ -188,25 +189,44 @@ def client(
         yield test_client
 
 
-def test_get_draft_autopsy_returns_404_for_an_uningested_league(client: TestClient) -> None:
+def test_get_draft_autopsy_returns_403_for_a_league_the_caller_does_not_own(
+    connect_as: Callable[[dict[str, Any]], ConnectedClient], raw_fixture: dict[str, Any]
+) -> None:
+    cc = connect_as(raw_fixture)
+    response = cc.client.get("/league/424242/draft-autopsy", headers=cc.headers)
+    assert response.status_code == 403
+
+
+def test_get_draft_autopsy_requires_auth(client: TestClient) -> None:
     response = client.get("/league/424242/draft-autopsy")
-    assert response.status_code == 404
+    assert response.status_code == 401
 
 
 def test_get_draft_autopsy_returns_409_for_the_synthetic_league(
-    client: TestClient, synthetic_league_id: int
+    client: TestClient,
+    synthetic_league_id: int,
+    raw_fixture: dict[str, Any],
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
     """The SYNTHETIC validation league's mock draft never records a pick
     sequence (see scripts/ingest_synthetic_league.py and this module's own
     docstring) -- this is the load-bearing 409 case PLAN.md's Phase 7 task
     description calls out explicitly."""
-    response = client.get(f"/league/{synthetic_league_id}/draft-autopsy")
+    from scripts.ingest_synthetic_league import build_synthetic_raw_payload
+
+    cc = connect_as(build_synthetic_raw_payload(raw_fixture))
+    response = cc.client.get(
+        f"/league/{synthetic_league_id}/draft-autopsy", headers=cc.headers
+    )
     assert response.status_code == 409
     assert "draft" in response.json()["detail"].lower()
 
 
 def test_get_draft_autopsy_route_matches_a_direct_compute_call(
-    client: TestClient, pg_conn: psycopg.Connection[Any], raw_fixture: dict[str, Any]
+    client: TestClient,
+    pg_conn: psycopg.Connection[Any],
+    raw_fixture: dict[str, Any],
+    connect_as: Callable[[dict[str, Any]], ConnectedClient],
 ) -> None:
     league_id = raw_fixture["id"]
     season_id = raw_fixture["seasonId"]
@@ -215,7 +235,10 @@ def test_get_draft_autopsy_route_matches_a_direct_compute_call(
 
     direct = compute_draft_autopsy(pg_conn, league_id, season_id)
 
-    response = client.get(f"/league/{league_id}/draft-autopsy", params={"season_id": season_id})
+    cc = connect_as(raw_fixture)
+    response = cc.client.get(
+        f"/league/{league_id}/draft-autopsy", params={"season_id": season_id}, headers=cc.headers
+    )
     assert response.status_code == 200
     body = response.json()
 
