@@ -16,6 +16,32 @@ export interface AuthResponse extends AuthUser {
   token: string;
 }
 
+/** Mirrors sim.api.app.TeamOptionOut. */
+export interface TeamOption {
+  team_id: number;
+  name: string;
+}
+
+/** Mirrors sim.api.app.ConnectLeagueResponseOut. */
+export interface ConnectLeagueResponse {
+  teams: TeamOption[];
+}
+
+/**
+ * Mirrors sim.api.app.LeagueConnectionOut. `league_id`/`season_id`/
+ * `team_id`/`connected_at` are all null together before a user has
+ * connected a league. `teams` is non-empty only while a league is
+ * connected but no team has been picked yet -- it is what
+ * /connect-league/pick-team renders.
+ */
+export interface LeagueConnection {
+  league_id: number | null;
+  season_id: number | null;
+  team_id: number | null;
+  connected_at: string | null;
+  teams: TeamOption[];
+}
+
 export interface TeamOutcome {
   team_id: number;
   team_name: string;

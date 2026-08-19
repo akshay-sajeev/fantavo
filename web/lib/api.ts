@@ -5,7 +5,9 @@ import type {
   AuthResponse,
   AuthUser,
   BeatMyLeagueResponse,
+  ConnectLeagueResponse,
   DraftAutopsyResponse,
+  LeagueConnection,
   LineupOptimizerResponse,
   PlayoffPlannerResponse,
   PowerRankingRoastResponse,
@@ -109,14 +111,23 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   return (await res.json()) as T;
 }
 
-async function authedFetch(path: string, token: string, method: "GET" | "POST"): Promise<Response> {
+async function authedFetch(
+  path: string,
+  token: string,
+  method: "GET" | "POST",
+  body?: unknown,
+): Promise<Response> {
   const url = new URL(path, API_BASE);
 
   let res: Response;
   try {
     res = await fetch(url, {
       method,
-      headers: { Authorization: `Bearer ${token}` },
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       cache: "no-store",
     });
   } catch (cause) {
@@ -297,4 +308,21 @@ export async function postAuthLogout(token: string): Promise<void> {
 export async function getAuthMe(token: string): Promise<AuthUser> {
   const res = await authedFetch("/auth/me", token, "GET");
   return (await res.json()) as AuthUser;
+}
+
+export async function postLeaguesConnect(
+  token: string,
+  body: { league_id: number; espn_s2?: string; swid?: string },
+): Promise<ConnectLeagueResponse> {
+  const res = await authedFetch("/leagues/connect", token, "POST", body);
+  return (await res.json()) as ConnectLeagueResponse;
+}
+
+export async function postLeaguesTeam(token: string, teamId: number): Promise<void> {
+  await authedFetch("/leagues/team", token, "POST", { team_id: teamId });
+}
+
+export async function getLeaguesMe(token: string): Promise<LeagueConnection> {
+  const res = await authedFetch("/leagues/me", token, "GET");
+  return (await res.json()) as LeagueConnection;
 }
