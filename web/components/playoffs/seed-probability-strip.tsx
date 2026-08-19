@@ -3,7 +3,7 @@ import { formatPercent, ordinal } from "@/lib/format";
 /**
  * Segmented horizontal bar of `seed_probabilities` -- the same "per-rank
  * stacked/horizontal bar" pattern `FinishDistributionStrip` already
- * established for `finish_distribution` (design-system/MASTER.md's chart
+ * established for `finish_distribution` (docs/MASTER.md's chart
  * recommendation for a discretized probability mass function), applied
  * here to which seed a team ends up holding rather than which place it
  * finishes. The trailing "missed playoffs" segment is

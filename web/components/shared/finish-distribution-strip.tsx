@@ -2,7 +2,7 @@ import { formatPercent, ordinal } from "@/lib/format";
 
 /**
  * Segmented horizontal bar showing the probability mass at each discrete
- * finish place -- design-system/MASTER.md's "per-rank stacked/horizontal
+ * finish place -- docs/MASTER.md's "per-rank stacked/horizontal
  * bar" recommendation for finish distributions, chosen over a box plot
  * specifically because `finish_distribution` is an already-discretized
  * probability mass function (one float per finish place) returned by the

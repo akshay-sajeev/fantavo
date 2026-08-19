@@ -1,6 +1,6 @@
 /**
  * Categorical palette for per-team chart series (power rankings bars,
- * finish-distribution strips). design-system/MASTER.md specifies role
+ * finish-distribution strips). docs/MASTER.md specifies role
  * colors (primary blue, brand accent green, destructive red) but not a full
  * categorical sweep for an arbitrary N-team league, so this extends those
  * hues into a larger, distinct-per-team sequence, chosen to read clearly on

@@ -20,7 +20,7 @@ import type { LineupProjection } from "@/lib/types";
  * narrative-first the same way this app's other synthesized-finding cards
  * do (StructuralFindingCard, RecommendationCallout): the "why pick this"
  * one-liner leads, then the weekly range and season odds -- distributions,
- * never bare point estimates, per design-system/MASTER.md -- and the full
+ * never bare point estimates, per docs/MASTER.md -- and the full
  * roster last, with swapped slots highlighted so the difference from
  * Current is legible without re-reading every row.
  */

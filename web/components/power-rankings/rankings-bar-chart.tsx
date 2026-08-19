@@ -9,7 +9,7 @@ import type { TeamOutcome } from "@/lib/types";
 
 /**
  * Horizontal bar chart, sorted descending by title probability --
- * design-system/MASTER.md's explicit recommendation for power rankings
+ * docs/MASTER.md's explicit recommendation for power rankings
  * ("Best chart type: Horizontal or vertical bar... always sort descending
  * by value... Value labels always visible on each bar"). `teams` must
  * already be sorted by the caller (the API's own title_probability field);

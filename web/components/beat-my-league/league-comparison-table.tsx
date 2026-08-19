@@ -13,7 +13,7 @@ import type { TeamLeagueProfile } from "@/lib/types";
 
 /**
  * Every team, side by side -- the Comparative Analysis Dashboard pattern
- * design-system/MASTER.md points to, and PLAN.md's own "for every team:
+ * docs/MASTER.md points to, and PLAN.md's own "for every team:
  * title probability, structural strengths, weaknesses, playoff schedule
  * difficulty" requirement. A real shadcn `Table` (per the ui-ux-pro-max
  * stack guidance for shadcn: Table for tabular data, not a div grid), not a
