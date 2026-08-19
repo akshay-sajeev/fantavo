@@ -99,6 +99,8 @@ from sim.api.playoff_planner_view import (
     TeamPlayoffPlan,
     compute_playoff_planner,
 )
+from sim.api.precompute import precompute_all_leagues
+from sim.api.reingest import reingest_all_connected_users
 from sim.api.roast_view import (
     PowerRankingRoastResult,
     RoastFact,
@@ -1220,6 +1222,17 @@ def require_league_owner(
     return user
 
 
+def require_cron_secret(authorization: str | None = Header(default=None)) -> None:
+    """Gates the two /internal/* endpoints Vercel Cron Jobs call. Not a
+    user-facing auth check (no AuthedUser involved) -- this exists so an
+    arbitrary public request can't repeatedly trigger a 10,000-sim Monte
+    Carlo precompute run. Verify against CRON_SECRET, an env var only
+    Vercel's own Cron trigger and this deployment's own config know."""
+    expected = os.environ.get("CRON_SECRET")
+    if not expected or authorization != f"Bearer {expected}":
+        raise HTTPException(status_code=401, detail="invalid or missing cron secret")
+
+
 @app.get("/health")
 def health(conn: psycopg.Connection[Any] = Depends(get_connection)) -> dict[str, str]:  # noqa: B008 (idiomatic FastAPI)
     """Unauthenticated on purpose -- a deploy healthcheck has no session to
@@ -1229,6 +1242,31 @@ def health(conn: psycopg.Connection[Any] = Depends(get_connection)) -> dict[str,
     deploy, not a silently-degraded one."""
     with conn.cursor() as cur:
         cur.execute("SELECT 1")
+    return {"status": "ok"}
+
+
+@app.post("/internal/precompute")
+def trigger_precompute(
+    _: None = Depends(require_cron_secret),
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> dict[str, str]:
+    """Vercel Cron Job target replacing sim/api/scheduler.py's in-process
+    precompute interval job for a serverless deploy (see docs/decisions.md's
+    Vercel Serverless Migration entry) -- calls the exact same function
+    local development's in-process scheduler calls, once per invocation."""
+    precompute_all_leagues(conn, datetime.now(UTC))
+    return {"status": "ok"}
+
+
+@app.post("/internal/reingest")
+def trigger_reingest(
+    _: None = Depends(require_cron_secret),
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> dict[str, str]:
+    """Vercel Cron Job target replacing sim/api/scheduler.py's in-process
+    reingest interval job for a serverless deploy -- see trigger_precompute
+    above for the same reasoning."""
+    reingest_all_connected_users(conn, datetime.now(UTC))
     return {"status": "ok"}
 
 
