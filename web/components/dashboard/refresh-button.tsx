@@ -110,7 +110,7 @@ export function RefreshButton({ leagueId }: { leagueId: number }) {
         {label}
       </Button>
       {state.kind === "error" && (
-        <p className="flex items-center gap-1.5 text-xs text-destructive">
+        <p className="flex items-center gap-1.5 text-xs text-destructive" aria-live="polite">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
           {state.message}
         </p>

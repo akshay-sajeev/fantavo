@@ -193,9 +193,10 @@ def test_refresh_returns_ok_with_odds_not_updated_when_precompute_fails(
     (real data ingested, league.ingested_at updated), but precompute_league
     raises IngestError. The response should show that ingestion succeeded
     (ingested_at is not None) but odds computation failed (odds_updated=False).
-    This differs from test_refresh_returns_ok_with_odds_not_updated_for_a_not_yet_
-    drafted_season, which exercises the first IngestError handler (reingest_user
-    itself fails, ingested_at stays None)."""
+    Same handler as test_refresh_returns_ok_with_odds_not_updated_for_a_not_yet_
+    drafted_season, just triggered by a different underlying failure (a raw
+    monkeypatched IngestError here, vs. a real no-rosters-to-compute-odds-for
+    condition there)."""
     monkeypatch.setattr(reingest, "fetch_live_league", lambda *a, **k: raw_fixture)
     cc = connect_as(raw_fixture)
 

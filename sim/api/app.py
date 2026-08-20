@@ -1447,14 +1447,20 @@ def refresh_league(
     except EspnFetchError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except IngestError:
-        # e.g. RosterNotAvailableError -- a new NFL season that hasn't
-        # drafted yet is a legitimate state, not a failure. Nothing
-        # changed, so nothing to precompute either.
+        # A parse-time failure inside ingest_league itself (e.g. a
+        # malformed/unparseable ESPN payload) -- nothing was ingested, so
+        # nothing changed and there's nothing to precompute either. NOT
+        # the not-yet-drafted-season case (that one succeeds here and
+        # fails in precompute_league below -- see that branch).
         return RefreshLeagueResponse(status="ok", ingested_at=None, odds_updated=False)
 
     try:
         precompute_league(conn, league_id, season_id, now)
-    except IngestError:
+    except (LeagueNotIngestedError, *_DATA_UNAVAILABLE_ERRORS):
+        # e.g. RosterNotAvailableError -- a new NFL season that hasn't
+        # drafted yet is a legitimate state, not a failure. reingest_user
+        # above already succeeded and committed, so ingested_at reflects
+        # that; there's just nothing to precompute yet.
         return RefreshLeagueResponse(status="ok", ingested_at=now, odds_updated=False)
 
     return RefreshLeagueResponse(status="ok", ingested_at=now, odds_updated=True)
