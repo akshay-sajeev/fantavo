@@ -111,10 +111,15 @@ def test_get_simulation_matches_a_direct_engine_call_with_the_same_seed(
 ) -> None:
     season_id = raw_fixture["seasonId"]
     computed_at = datetime(2026, 6, 1, tzinfo=timezone.utc)
+
+    # connect_as() below now triggers its own post-connect precompute (at
+    # the production n_sims default) as part of connecting -- this test's
+    # own n_sims=500 seeding must run AFTER that, so it's what's actually
+    # cached when the assertions below run against it.
+    cc = connect_as(build_synthetic_raw_payload(raw_fixture))
     seed = precompute_league(pg_conn, synthetic_league_id, season_id, computed_at, n_sims=500)
     pg_conn.commit()
 
-    cc = connect_as(build_synthetic_raw_payload(raw_fixture))
     response = cc.client.get(
         f"/league/{synthetic_league_id}/simulation",
         params={"season_id": season_id},
