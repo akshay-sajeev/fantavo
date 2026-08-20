@@ -1332,6 +1332,34 @@ def login(
     except auth_view.InvalidCredentialsError as exc:
         raise HTTPException(status_code=401, detail=_GENERIC_AUTH_ERROR) from exc
     token = auth_view.create_session(conn, user, now)
+    # Commit the session now, before the best-effort refresh below --
+    # get_connection's ambient-transaction behavior (see its own
+    # docstring) means a failure inside _run_league_refresh could
+    # otherwise roll back this INSERT along with it. The session must be
+    # durable regardless of what the refresh attempt does next.
+    conn.commit()
+
+    state = league_connection_view.get_connection_state(conn, user.user_id)
+    if state.league_id is not None:
+        try:
+            _run_league_refresh(conn, user.user_id, state.league_id, now)
+        except HTTPException as exc:
+            # Expected outcomes: a stale cooldown (routine -- this fires
+            # on nearly every login within 5 minutes of the last one),
+            # an ESPN outage, or a credential problem. Must never fail
+            # login itself.
+            logger.debug(
+                "login-triggered refresh skipped for user_id=%s: %s", user.user_id, exc.detail
+            )
+        except Exception:
+            # An unexpected exception type from deeper in the reingest/
+            # precompute chain (e.g. a non-JSON ESPN response, a
+            # structurally unexpected payload) -- roll back whatever
+            # partial work it left behind and log loudly, but still
+            # never fail login itself.
+            conn.rollback()
+            logger.exception("login-triggered refresh failed unexpectedly for user_id=%s", user.user_id)
+
     return AuthResponseOut(token=token, user_id=user.user_id, email=user.email)
 
 
@@ -1368,6 +1396,39 @@ def connect_league_route(
         # the key or the credential (see sim.api.crypto), so surfacing it is
         # safe and tells the operator exactly what to fix.
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    # connect_league() above already did the one live ESPN fetch + ingest
+    # this needs; only the precompute half is missing, so this calls it
+    # directly rather than going through _run_league_refresh (which would
+    # redundantly re-fetch from ESPN). No cooldown check either -- a
+    # just-connected league has nothing to protect against.
+    #
+    # Commit connect_league()'s work now, before this best-effort step --
+    # same reasoning as login's own commit-before-best-effort (see
+    # get_connection's ambient-transaction docstring): the connection
+    # itself must be durable regardless of what precompute does next.
+    conn.commit()
+
+    season_id = league_connection_view.resolve_current_season_id(now)
+    try:
+        # A smaller n_sims than the nightly batch's default -- this just
+        # needs to make the dashboard render immediately after connecting
+        # (the actual goal), not match the cron job's full precision; the
+        # nightly cron re-runs at the full PRECOMPUTE_N_SIMS within hours.
+        # Cuts the added connect-path latency roughly 5x.
+        precompute_league(conn, body.league_id, season_id, now, n_sims=LIVE_WHATIF_N_SIMS)
+    except (LeagueNotIngestedError, *_DATA_UNAVAILABLE_ERRORS) as exc:
+        # e.g. a not-yet-drafted new season -- connect_league() above
+        # already succeeded and committed the ingest; there's just
+        # nothing to simulate yet. Never fails the connect response.
+        logger.info("post-connect precompute skipped for league_id=%s: %s", body.league_id, exc)
+    except Exception:
+        # Same reasoning as login's identical guard above -- an
+        # unexpected exception type must never fail the connect response,
+        # since connect_league() already succeeded and committed.
+        conn.rollback()
+        logger.exception("post-connect precompute failed unexpectedly for league_id=%s", body.league_id)
+
     return ConnectLeagueResponseOut(
         teams=[TeamOptionOut(team_id=t.team_id, name=t.name) for t in teams]
     )
@@ -1411,17 +1472,16 @@ def get_leagues_me(
     )
 
 
-@app.post("/league/{league_id}/refresh", response_model=RefreshLeagueResponse)
-def refresh_league(
-    league_id: int,
-    _owner: auth_view.AuthedUser = Depends(require_league_owner),  # noqa: B008 (idiomatic FastAPI)
-    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+def _run_league_refresh(
+    conn: psycopg.Connection[Any], user_id: int, league_id: int, now: datetime
 ) -> RefreshLeagueResponse:
-    """Manual, on-demand counterpart to the daily Cron-triggered
-    /internal/reingest + /internal/precompute pair (see docs/decisions.md's
-    Vercel Serverless Migration entry) -- re-ingests and recomputes odds
-    for exactly the caller's one connected league, not the full batch."""
-    now = datetime.now(UTC)
+    """Shared by the manual POST /league/{id}/refresh route and the
+    best-effort auto-refresh login triggers (see docs/decisions.md's
+    Auto-Refresh on Login and Connect entry). Raises HTTPException for
+    the cooldown (429) and hard-error (502/500) cases -- callers that
+    want those to actually reach the client (the manual route) let it
+    propagate; callers that want this to be best-effort (login) catch
+    HTTPException and log it instead."""
     season_id = league_connection_view.resolve_current_season_id(now)
 
     with conn.cursor() as cur:
@@ -1441,7 +1501,7 @@ def refresh_league(
             )
 
     try:
-        reingest_user(conn, _owner.user_id, now)
+        reingest_user(conn, user_id, now)
     except CredentialEncryptionError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except EspnFetchError as exc:
@@ -1464,6 +1524,19 @@ def refresh_league(
         return RefreshLeagueResponse(status="ok", ingested_at=now, odds_updated=False)
 
     return RefreshLeagueResponse(status="ok", ingested_at=now, odds_updated=True)
+
+
+@app.post("/league/{league_id}/refresh", response_model=RefreshLeagueResponse)
+def refresh_league(
+    league_id: int,
+    _owner: auth_view.AuthedUser = Depends(require_league_owner),  # noqa: B008 (idiomatic FastAPI)
+    conn: psycopg.Connection[Any] = Depends(get_connection),  # noqa: B008 (idiomatic FastAPI)
+) -> RefreshLeagueResponse:
+    """Manual, on-demand counterpart to the daily Cron-triggered
+    /internal/reingest + /internal/precompute pair (see docs/decisions.md's
+    Vercel Serverless Migration entry) -- re-ingests and recomputes odds
+    for exactly the caller's one connected league, not the full batch."""
+    return _run_league_refresh(conn, _owner.user_id, league_id, datetime.now(UTC))
 
 
 @app.get("/league/{league_id}/simulation", response_model=SimulationResponse)

@@ -20,7 +20,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from ingest.db import DEFAULT_TEST_DSN
+from ingest.espn_client import EspnFetchError
 from sim.api import app as app_module
+from sim.api import league_connection_view, reingest
 from sim.api.auth_view import (
     SESSION_LIFETIME_DAYS,
     THROTTLE_LOCKOUT_MINUTES,
@@ -39,6 +41,7 @@ from sim.api.auth_view import (
     validate_session,
     verify_password,
 )
+from sim.api.cache import read_cached_simulation
 
 TEST_DSN = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DSN)
 
@@ -412,3 +415,159 @@ def test_no_plaintext_password_or_raw_token_ever_lands_in_the_database(
     assert not any(password in row[0] for row in password_rows)
     assert not any(token in row[0] for row in session_rows)
     assert not any(token == row[0] for row in session_rows)
+
+
+def test_login_triggers_a_refresh_for_a_connected_league(
+    client: TestClient,
+    raw_fixture: dict[str, Any],
+    pg_conn: psycopg.Connection[Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Backdate ingested_at past the cooldown before logging in again --
+    connect's own ingest just ran moments ago, and without this the
+    login's own refresh attempt would be correctly skipped by the
+    cooldown, producing a false negative rather than a real signal."""
+    monkeypatch.setattr(league_connection_view, "fetch_live_league", lambda *a, **k: raw_fixture)
+    signup_res = client.post(
+        "/auth/signup",
+        json={"email": "login-refresh@example.com", "password": "a-real-password"},
+    )
+    token = signup_res.json()["token"]
+    connect_res = client.post(
+        "/leagues/connect",
+        json={"league_id": raw_fixture["id"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert connect_res.status_code == 200
+
+    old = datetime.now(timezone.utc) - timedelta(minutes=10)
+    pg_conn.execute(
+        "UPDATE league SET ingested_at = %s WHERE league_id = %s AND season_id = %s",
+        (old, raw_fixture["id"], raw_fixture["seasonId"]),
+    )
+    pg_conn.commit()
+
+    monkeypatch.setattr(reingest, "fetch_live_league", lambda *a, **k: raw_fixture)
+    login_res = client.post(
+        "/auth/login", json={"email": "login-refresh@example.com", "password": "a-real-password"}
+    )
+    assert login_res.status_code == 200
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT ingested_at FROM league WHERE league_id = %s AND season_id = %s",
+            (raw_fixture["id"], raw_fixture["seasonId"]),
+        )
+        row = cur.fetchone()
+    assert row is not None
+    (ingested_at,) = row
+    assert ingested_at > old
+
+    cached = read_cached_simulation(pg_conn, raw_fixture["id"], raw_fixture["seasonId"])
+    assert cached is not None
+    assert cached.n_sims > 0
+
+
+def test_login_succeeds_even_when_the_triggered_refresh_fails(
+    client: TestClient,
+    raw_fixture: dict[str, Any],
+    pg_conn: psycopg.Connection[Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(league_connection_view, "fetch_live_league", lambda *a, **k: raw_fixture)
+    signup_res = client.post(
+        "/auth/signup",
+        json={"email": "login-refresh-fails@example.com", "password": "a-real-password"},
+    )
+    token = signup_res.json()["token"]
+    client.post(
+        "/leagues/connect",
+        json={"league_id": raw_fixture["id"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    old = datetime.now(timezone.utc) - timedelta(minutes=10)
+    pg_conn.execute(
+        "UPDATE league SET ingested_at = %s WHERE league_id = %s AND season_id = %s",
+        (old, raw_fixture["id"], raw_fixture["seasonId"]),
+    )
+    pg_conn.commit()
+
+    def _fail(*args: Any, **kwargs: Any) -> Any:
+        raise EspnFetchError("simulated ESPN outage")
+
+    monkeypatch.setattr(reingest, "fetch_live_league", _fail)
+
+    login_res = client.post(
+        "/auth/login",
+        json={"email": "login-refresh-fails@example.com", "password": "a-real-password"},
+    )
+    assert login_res.status_code == 200
+    assert login_res.json()["token"]
+
+
+def test_login_is_a_no_op_refresh_wise_with_no_connected_league(client: TestClient) -> None:
+    client.post(
+        "/auth/signup", json={"email": "no-league@example.com", "password": "a-real-password"}
+    )
+    login_res = client.post(
+        "/auth/login", json={"email": "no-league@example.com", "password": "a-real-password"}
+    )
+    assert login_res.status_code == 200
+
+
+def test_login_respects_the_cooldown_across_two_rapid_logins(
+    client: TestClient,
+    raw_fixture: dict[str, Any],
+    pg_conn: psycopg.Connection[Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(league_connection_view, "fetch_live_league", lambda *a, **k: raw_fixture)
+    signup_res = client.post(
+        "/auth/signup", json={"email": "rapid-login@example.com", "password": "a-real-password"}
+    )
+    token = signup_res.json()["token"]
+    client.post(
+        "/leagues/connect",
+        json={"league_id": raw_fixture["id"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    old = datetime.now(timezone.utc) - timedelta(minutes=10)
+    pg_conn.execute(
+        "UPDATE league SET ingested_at = %s WHERE league_id = %s AND season_id = %s",
+        (old, raw_fixture["id"], raw_fixture["seasonId"]),
+    )
+    pg_conn.commit()
+
+    monkeypatch.setattr(reingest, "fetch_live_league", lambda *a, **k: raw_fixture)
+
+    first_login = client.post(
+        "/auth/login", json={"email": "rapid-login@example.com", "password": "a-real-password"}
+    )
+    assert first_login.status_code == 200
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT ingested_at FROM league WHERE league_id = %s AND season_id = %s",
+            (raw_fixture["id"], raw_fixture["seasonId"]),
+        )
+        row = cur.fetchone()
+    assert row is not None
+    (after_first,) = row
+    assert after_first > old  # the first login's refresh actually ran
+
+    second_login = client.post(
+        "/auth/login", json={"email": "rapid-login@example.com", "password": "a-real-password"}
+    )
+    assert second_login.status_code == 200
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT ingested_at FROM league WHERE league_id = %s AND season_id = %s",
+            (raw_fixture["id"], raw_fixture["seasonId"]),
+        )
+        row = cur.fetchone()
+    assert row is not None
+    (after_second,) = row
+    assert after_second == after_first  # the second login's refresh was skipped (cooldown)
