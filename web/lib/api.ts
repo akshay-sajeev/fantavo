@@ -11,6 +11,7 @@ import type {
   LineupOptimizerResponse,
   PlayoffPlannerResponse,
   PowerRankingRoastResponse,
+  RefreshLeagueResponse,
   RosterResponse,
   ScheduleResponse,
   SeasonReplayResponse,
@@ -38,6 +39,7 @@ export class ApiError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    public readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "ApiError";
@@ -114,7 +116,13 @@ async function authedFetch(
     } catch {
       // not JSON -- fall through and use the raw body text
     }
-    throw new ApiError(res.status, detail || res.statusText);
+    const retryAfterHeader = res.headers.get("Retry-After");
+    const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : undefined;
+    throw new ApiError(
+      res.status,
+      detail || res.statusText,
+      Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : undefined,
+    );
   }
   return res;
 }
@@ -329,4 +337,12 @@ export async function postLeaguesTeam(token: string, teamId: number): Promise<vo
 export async function getLeaguesMe(token: string): Promise<LeagueConnection> {
   const res = await authedFetch("/leagues/me", token, "GET");
   return (await res.json()) as LeagueConnection;
+}
+
+export async function postLeagueRefresh(
+  token: string,
+  leagueId: number,
+): Promise<RefreshLeagueResponse> {
+  const res = await authedFetch(`/league/${leagueId}/refresh`, token, "POST");
+  return (await res.json()) as RefreshLeagueResponse;
 }
