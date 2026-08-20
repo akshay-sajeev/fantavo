@@ -7,6 +7,7 @@ exercise the real ingest_league() path end-to-end without a network call.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -22,6 +23,7 @@ from ingest.db import DEFAULT_TEST_DSN
 from ingest.espn_client import EspnAuthenticationError
 from sim.api import app as app_module
 from sim.api import auth_view, league_connection_view
+from sim.api.cache import read_cached_simulation
 from sim.api.league_connection_view import (
     LeagueConnectionError,
     NoConnectedLeagueError,
@@ -258,3 +260,61 @@ def test_leagues_team_rejects_a_fake_team_over_http(
 
     res = client.post("/leagues/team", json={"team_id": 999999}, headers=headers)
     assert res.status_code == 400
+
+
+def test_connect_league_precomputes_odds_immediately(
+    client: TestClient,
+    raw_fixture: dict[str, Any],
+    pg_conn: psycopg.Connection[Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test for the dashboard-404 gap: a newly-connected league
+    must have a cached simulation the instant connect finishes, not just
+    after the next daily Cron run."""
+    monkeypatch.setattr(league_connection_view, "fetch_live_league", lambda *a, **k: raw_fixture)
+    signup_res = client.post(
+        "/auth/signup",
+        json={"email": "precompute-on-connect@example.com", "password": "a-real-password"},
+    )
+    headers = {"Authorization": f"Bearer {signup_res.json()['token']}"}
+
+    connect_res = client.post(
+        "/leagues/connect", json={"league_id": raw_fixture["id"]}, headers=headers
+    )
+    assert connect_res.status_code == 200
+
+    cached = read_cached_simulation(pg_conn, raw_fixture["id"], raw_fixture["seasonId"])
+    assert cached is not None
+    assert cached.n_sims > 0
+
+
+def test_connect_league_still_succeeds_when_precompute_cannot_run_yet(
+    client: TestClient,
+    raw_fixture: dict[str, Any],
+    pg_conn: psycopg.Connection[Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A not-yet-drafted league: connect_league's own ingest succeeds fine
+    (empty rosters store without error), only the post-connect precompute
+    can't run -- must not fail the connect response."""
+    pre_draft_raw = copy.deepcopy(raw_fixture)
+    pre_draft_raw["id"] = raw_fixture["id"] + 1  # distinct from the real league's id
+    pre_draft_raw["draftDetail"]["drafted"] = False
+    for team in pre_draft_raw["teams"]:
+        team["roster"]["entries"] = []
+    monkeypatch.setattr(league_connection_view, "fetch_live_league", lambda *a, **k: pre_draft_raw)
+
+    signup_res = client.post(
+        "/auth/signup",
+        json={"email": "precompute-skip-on-connect@example.com", "password": "a-real-password"},
+    )
+    headers = {"Authorization": f"Bearer {signup_res.json()['token']}"}
+
+    connect_res = client.post(
+        "/leagues/connect", json={"league_id": pre_draft_raw["id"]}, headers=headers
+    )
+    assert connect_res.status_code == 200
+    assert len(connect_res.json()["teams"]) == len(pre_draft_raw["teams"])
+
+    cached = read_cached_simulation(pg_conn, pre_draft_raw["id"], pre_draft_raw["seasonId"])
+    assert cached is None
