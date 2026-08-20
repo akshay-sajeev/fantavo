@@ -2955,3 +2955,124 @@ sub-feature; nothing needs undoing when that day comes.
   (the `app/layout.tsx` `LayoutProps` error noted as pre-existing in
   Phase 19 no longer reproduces once `.next/types` exists from a real
   build -- a stale-artifact quirk on a fresh checkout, not a real error).
+
+## Phase 21 — Auto-Refresh on Login and Connect
+
+- **The problem this closes**: live testing of Phase 20's manual refresh
+  button surfaced a real gap on top of it -- a brand-new connection has no
+  cached simulation at all until the next scheduled precompute run, so a
+  user who just connected their league sees a dashboard 404
+  (`GET /league/{league_id}/simulation`'s existing "no precomputed
+  simulation cached... yet" 404, unchanged) until the cron job catches up,
+  hours later. Two more triggers close that gap: `POST /auth/login`
+  best-effort refreshes an already-connected user's league on every
+  login, and `POST /leagues/connect` runs precompute (not a full
+  reingest -- `connect_league` already did the one live ESPN fetch this
+  needs) immediately after a brand-new connection, so the first dashboard
+  load after connecting has something real to show instead of a 404.
+  `_run_league_refresh` (`sim/api/app.py`) extracts Phase 20's
+  `refresh_league` route body into a shared function: the cooldown check,
+  `reingest_user`, and `precompute_league`, with the exact same
+  `HTTPException` shape (429 cooldown, 502 ESPN, 500 credential) so the
+  manual route's own behavior is unchanged -- it just calls the extracted
+  function now. Neither `reingest_user` nor `precompute_league` changed.
+- **Best-effort containment, and why it had to be more than
+  `except HTTPException`.** The plan's constraint was that a refresh
+  failure must never fail login or connect -- but the first version of
+  both routes only caught `HTTPException`, the type `_run_league_refresh`
+  itself raises for its own expected cases (cooldown, ESPN outage,
+  credential error). Anything unexpected escaping from deeper in the
+  chain -- `ingest/espn_client.py`'s unguarded `response.json()` on a
+  non-JSON ESPN body, `ingest/db.py`'s unguarded payload subscripts on a
+  structurally different payload -- was not an `HTTPException` and would
+  propagate straight out as an unhandled 500. That mattered far more for
+  `login` than it first looked: the blast radius wasn't "one button
+  stops working," it was "authentication itself, for every user with a
+  connected league" -- one ESPN-side hiccup could 500 out login entirely.
+  Caught in final-review and fixed by adding a second, broader
+  `except Exception` to both routes, calling `conn.rollback()` (undoing
+  whatever partial work the failed attempt left on the connection) and
+  `logger.exception(...)` (captures the traceback, since an unexpected
+  type here is a real signal worth an operator's attention) before
+  falling through to the route's normal success response either way. The
+  original `except HTTPException` branch's log level also dropped from
+  `logger.info` to `logger.debug` in the same pass: the cooldown skip is
+  the expected, routine outcome on nearly every login within 5 minutes of
+  the last one, not something worth INFO-level noise on every request.
+- **A commit inserted before each best-effort block, for the same reason
+  in both routes.** `get_connection`'s own docstring (`sim/api/app.py`)
+  documents that a bare read opens an ambient transaction that a later
+  `with conn.transaction():` write nests inside as a SAVEPOINT rather
+  than a top-level commit, and that nothing commits the outer transaction
+  until `get_connection`'s `finally` block runs at the very end of the
+  request. Without an explicit `conn.commit()` right after
+  `create_session` (login) / before the post-connect precompute
+  (connect), a failure inside the best-effort refresh -- including the
+  new `except Exception` branch's own `conn.rollback()` -- could roll
+  back the session INSERT or the connection's own commit along with it,
+  silently undoing work the route had already told the client succeeded.
+  Both routes now call `conn.commit()` immediately after the durable part
+  of the request completes and before the best-effort refresh/precompute
+  begins, so that work is guaranteed durable no matter what happens next.
+- **`n_sims` reduced on the connect path only.** `connect_league_route`'s
+  post-connect `precompute_league` call now passes
+  `n_sims=LIVE_WHATIF_N_SIMS` (2,000) instead of `precompute_league`'s
+  own `PRECOMPUTE_N_SIMS` default -- the goal here is just to make the
+  dashboard render something real immediately after connecting, not to
+  match the nightly batch job's full precision, and the nightly cron
+  re-runs this same league within hours at the full `PRECOMPUTE_N_SIMS`
+  anyway. Cuts the added connect-path latency roughly 5x. `login`'s own
+  `_run_league_refresh` call is unchanged and still uses the shared
+  function's default (matching the manual refresh route's precision),
+  since login isn't the first-ever view of a league the way connect is.
+- **`vercel.json` gained a `functions.api/index.py.maxDuration: 60`
+  entry**, the maximum this project's confirmed Hobby plan allows (see
+  this file's own Vercel Serverless Migration entry on the Hobby
+  cron-frequency limit). Both new triggers add multi-second, network-bound
+  work to user-facing routes -- `fetch_live_league` makes two sequential
+  HTTP requests, each with its own 30s timeout, ~60s worst case, on top of
+  ingest and precompute compute time -- and without an explicit
+  `maxDuration` a slow ESPN response risked the serverless function being
+  killed mid-request. **This is explicitly not a full fix, and the gap is
+  accepted as-is for now**: ESPN's own worst-case latency across those two
+  sequential 30s-timeout requests can still approach or exceed even a
+  maxed-out 60s Hobby-plan duration limit. Raises the ceiling; does not
+  close the gap.
+- **Two more accepted risks, deliberately left unfixed in this phase,
+  documented here rather than silently shipped:**
+  - Connect's post-connect precompute resolves the season via
+    `resolve_current_season_id(now)` -- a guess based on `now.year` --
+    not the season `ingest_league` actually stored moments earlier inside
+    `connect_league`. `reingest_user`'s own docstring (`sim/api/
+    reingest.py`) already notes these two can differ, e.g. during a
+    season rollover. On a mismatch, `precompute_league` raises
+    `LeagueNotIngestedError`, which the surrounding `except` clause
+    silently absorbs as "nothing to precompute yet" -- and the very
+    dashboard-404 gap this phase exists to close would silently
+    reappear for that user. Not fixed here: closing it properly would
+    require `connect_league` to return the season id it actually
+    resolved, which is out of this plan's scope.
+  - Two near-simultaneous logins for the same user (or a login-triggered
+    refresh overlapping the nightly cron's own reingest/precompute pass)
+    both pass the cooldown's check-then-act `SELECT` before either
+    writes. No corruption results -- same idempotent code path, same lock
+    ordering -- just one request waiting on Postgres row locks the
+    other's ingest already holds. Not addressed, the same accepted-risk
+    class as Phase 20's own already-documented cooldown-keying decision.
+- **Test coverage gap caught in final review**: the original
+  `test_login_triggers_a_refresh_for_a_connected_league` only asserted
+  `ingested_at` had advanced after login, not that a fresh simulation was
+  actually cached -- the spec asked for both, since "refreshed the data"
+  and "the dashboard has something to show" are two different claims.
+  Fixed by adding a `read_cached_simulation(pg_conn, ...)` assertion
+  (non-`None`, `n_sims > 0`) alongside the existing `ingested_at` check.
+- **Verification**: `pytest sim/tests ingest/tests -q` -- 342 passed in
+  91.97s, matching the pre-existing-baseline count exactly (this phase's
+  changes touch error-handling paths and one `n_sims` value the prior
+  test suite didn't exercise differently, plus the one new assertion
+  above). `mypy --strict sim` -- 21 pre-existing errors, all in
+  `sim/engine.py` and `sim/tests/test_engine.py`, neither file touched by
+  this phase; no new errors. `ruff check sim` -- 1 pre-existing error in
+  `sim/api/waiver_intelligence_view.py`, not touched by this phase; no
+  new errors. `vercel.json` re-validated as well-formed JSON after the
+  `functions` key addition.

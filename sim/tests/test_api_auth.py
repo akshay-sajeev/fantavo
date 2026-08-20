@@ -41,6 +41,7 @@ from sim.api.auth_view import (
     validate_session,
     verify_password,
 )
+from sim.api.cache import read_cached_simulation
 
 TEST_DSN = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DSN)
 
@@ -461,6 +462,10 @@ def test_login_triggers_a_refresh_for_a_connected_league(
     assert row is not None
     (ingested_at,) = row
     assert ingested_at > old
+
+    cached = read_cached_simulation(pg_conn, raw_fixture["id"], raw_fixture["seasonId"])
+    assert cached is not None
+    assert cached.n_sims > 0
 
 
 def test_login_succeeds_even_when_the_triggered_refresh_fails(
