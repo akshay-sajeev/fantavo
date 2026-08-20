@@ -2856,3 +2856,102 @@ sub-feature; nothing needs undoing when that day comes.
   in `/web/app/layout.tsx` pre-exists this branch; `npx tsc --noEmit`
   verified pre-existing via `git stash`. No `/web` files changed in this
   phase. `npx eslint .` clean in `/web`.
+
+## Phase 20 — Manual League Refresh
+
+- **A per-user, per-league manual refresh, on top of the daily Cron-triggered
+  batch jobs Phase 19 introduced.** `POST /league/{league_id}/refresh`
+  (`sim/api/app.py`), gated by the existing `require_league_owner`
+  dependency exactly like every other `/league/{league_id}/*` route,
+  re-ingests the caller's own connected league from ESPN
+  (`reingest_user`, unmodified) and recomputes its simulation odds
+  (`precompute_league`, unmodified, measured locally at 0.36s for the real
+  fixture league's 10,000 sims) -- one league, on demand, rather than
+  waiting for the once-daily batch. Neither `reingest_user` nor
+  `precompute_league` changed; this phase only adds a new caller.
+- **A 5-minute cooldown, enforced server-side and keyed on the league, not
+  the user.** Reads `league.ingested_at` for the resolved
+  `(league_id, season_id)`; a second request inside the window gets 429
+  with a real `Retry-After` header (RFC 9110), not a client-invented JSON
+  field. Keyed on the league rather than the caller deliberately: this
+  app's shared-league-view product model means a second connected user's
+  refresh within the window would just repeat the same ESPN fetch, not
+  serve a genuinely different need -- and a client-side-only cooldown
+  would be trivially bypassable (curl doesn't run React state), so the
+  real gate lives in the one place that matters.
+- **Two distinct "partial success" outcomes, both `200 OK`, both requiring
+  an accurately-broadened exception catch to reach.** If `reingest_user`
+  itself raises `IngestError` (a parse-time failure inside `ingest_league`
+  -- nothing was ingested), the response is `ingested_at=None,
+  odds_updated=False`. If `reingest_user` succeeds but `precompute_league`
+  can't run (a not-yet-drafted new NFL season, insufficient historical
+  data for variance fitting, or an unresolvable season id), the response
+  is `ingested_at=<real timestamp>, odds_updated=False` -- the data really
+  did update, only the odds computation couldn't. Getting this backwards
+  matters: by the time `precompute_league` runs, `reingest_user` has
+  already committed real data (`get_connection`'s unconditional
+  `finally: conn.commit()`), so reporting `ingested_at=None` there would
+  tell the frontend "nothing happened" when something did. The
+  `precompute_league` branch's exception catch was caught, in the final
+  whole-branch review, as narrower than every other `load_league`-backed
+  route in this file (`_DATA_UNAVAILABLE_ERRORS = (IngestError,
+  ParamsError)`, each paired with its own `except LeagueNotIngestedError`)
+  and narrower than the batch job's own `_SKIPPABLE_ERRORS` -- a bare
+  `except IngestError` there missed `ParamsError` and
+  `LeagueNotIngestedError` (the latter isn't even an `IngestError`
+  subclass), which would have surfaced as an unhandled 500 after the
+  re-ingest had already committed. Fixed to match this file's own
+  established convention.
+- **`web/lib/api.ts`'s `ApiError` gained one new optional field,
+  `retryAfterSeconds`, populated from the `Retry-After` header, rather
+  than a one-off return-type union for this single endpoint.** Every other
+  function in that file returns the raw API response type and throws
+  `ApiError` for non-2xx; `postLeagueRefresh` fits that shape exactly
+  (including for 429) instead of introducing a second pattern the rest of
+  the file doesn't use. Caught and corrected during plan-writing, before
+  any code was written against the union version.
+- **`web/components/dashboard/refresh-button.tsx`, wired into the
+  dashboard/Overview page's header only** (`web/app/league/[leagueId]/
+  page.tsx`) -- not the shared per-league layout, since every other
+  sub-page still benefits from the fresher cache next time it loads
+  without needing the button itself on every page. Client Component
+  fetching the Route Handler directly (`web/lib/api.ts` is
+  `import "server-only"` and cannot be imported from client code); no new
+  toast/notification system, feedback is inline button state
+  (`idle -> refreshing -> (cooldown | error)`), matching this codebase's
+  existing `login-form.tsx` pattern rather than introducing one.
+- **Task 1 (the backend route) took two fix rounds, both genuine.** Round 1
+  corrected the `ingested_at` value on the `precompute_league`-failure
+  branch (see above). Round 2 added test coverage the first round's fix
+  had left missing: both tests present at that point exercised the same
+  (`precompute_league`) branch, because a pre-draft-shaped payload was
+  wrongly assumed to make `reingest_user` itself fail -- traced during
+  review and confirmed false (`ingest_league` stores an empty roster fine;
+  it's `precompute_league`'s `build_team_params` that raises
+  `RosterNotAvailableError` for one). A concurrent-pytest-processes lock
+  contention issue on the shared test database (multiple stray background
+  test runs from both the implementer and the reviewing controller,
+  hitting the same `TRUNCATE TABLE`-requiring fixture) produced spurious
+  120s+ "timeouts" mid-review that looked like a code hang but weren't;
+  resolved by killing the stray processes and re-running cleanly (336/336
+  passing in under 90s) rather than chasing a phantom bug.
+- **Live-verified by the controller directly**, not just inferred from the
+  test suite: the button renders on a real dashboard; a real click flows
+  through the Route Handler into the sim route, `require_league_owner`,
+  the cooldown check, and `reingest_user`; a genuine 502 (this sandbox has
+  no live ESPN network access) rendered the correct
+  "Couldn't reach ESPN, try again shortly" copy and the button re-enabled
+  itself afterward; manually backdating `ingested_at` to simulate a fresh
+  refresh confirmed the 429/cooldown path renders a live "Refresh (M:SS)"
+  countdown with the button genuinely `disabled` in the DOM, not just
+  styled to look that way. The full success path (real ingest + odds
+  update) is covered by Task 1's automated DB-observable tests instead,
+  since this sandbox can't reach live ESPN.
+- **Verification**: `pytest sim/tests ingest/tests -q` all passing (336
+  tests, including the new `sim/tests/test_api_refresh.py`); `mypy --strict
+  sim` and `ruff check sim` show no new errors beyond the same
+  pre-existing baseline prior phases have already confirmed. `npx tsc
+  --noEmit`, `npx eslint .`, and `npm run build` all clean in `/web`
+  (the `app/layout.tsx` `LayoutProps` error noted as pre-existing in
+  Phase 19 no longer reproduces once `.next/types` exists from a real
+  build -- a stale-artifact quirk on a fresh checkout, not a real error).
